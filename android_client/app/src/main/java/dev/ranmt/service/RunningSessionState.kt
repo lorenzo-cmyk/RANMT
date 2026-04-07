@@ -2,6 +2,7 @@ package dev.ranmt.service
 
 import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.TelemetryPoint
+import dev.ranmt.data.TransportStats
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -13,6 +14,7 @@ data class RunningUiState(
     val lastPoint: TelemetryPoint? = null,
     val rsrpHistory: List<Int> = emptyList(),
     val sinrHistory: List<Int> = emptyList(),
+    val transportStats: TransportStats? = null,
     val resumed: Boolean = false,
     val locationPermissionMissing: Boolean = false
 )
@@ -40,6 +42,10 @@ object RunningSessionState {
 
     fun updateConnection(state: ConnectionState) {
         _state.update { it.copy(connectionState = state) }
+    }
+
+    fun updateTransport(stats: TransportStats?) {
+        _state.update { it.copy(transportStats = stats) }
     }
 
     fun setLocationPermissionMissing(missing: Boolean) {

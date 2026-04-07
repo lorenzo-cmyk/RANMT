@@ -14,6 +14,7 @@ class SessionPrefs(context: Context) {
             .putInt(KEY_SERVER_PORT, config.serverPort)
             .putString(KEY_DIRECTION, config.direction)
             .putInt(KEY_BITRATE, config.bitrateBps)
+            .putBoolean(KEY_INSECURE, config.insecure)
             .apply()
     }
 
@@ -32,10 +33,11 @@ class SessionPrefs(context: Context) {
         val serverPort = prefs.getInt(KEY_SERVER_PORT, 0)
         val direction = prefs.getString(KEY_DIRECTION, "Uplink") ?: "Uplink"
         val bitrate = prefs.getInt(KEY_BITRATE, 0)
+        val insecure = prefs.getBoolean(KEY_INSECURE, false)
         return ActiveSession(
             sessionId = id,
             startedAt = startedAt,
-            config = MeasurementConfig(serverIp, serverPort, direction, bitrate)
+            config = MeasurementConfig(serverIp, serverPort, direction, bitrate, insecure)
         )
     }
 
@@ -53,5 +55,6 @@ class SessionPrefs(context: Context) {
         private const val KEY_SERVER_PORT = "server_port"
         private const val KEY_DIRECTION = "direction"
         private const val KEY_BITRATE = "bitrate"
+        private const val KEY_INSECURE = "insecure"
     }
 }

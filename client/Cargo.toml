@@ -12,10 +12,15 @@ name = "ranmt_client"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib"]
 
+[features]
+default = []
+ffi = ["dep:uniffi", "dep:thiserror"]
+
 [dependencies]
 ranmt-shared = { path = "../shared" }
 quiche = "0.28"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -23,3 +28,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.4"
+uniffi = { version = "0.27", optional = true, features = ["tokio"] }
+thiserror = { version = "2", optional = true }

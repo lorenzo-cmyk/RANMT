@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Network
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.telephony.CellInfoLte
@@ -31,6 +33,10 @@ import dev.ranmt.data.SessionMetrics
 import dev.ranmt.data.SessionRepository
 import dev.ranmt.data.SessionSummary
 import dev.ranmt.data.TelemetryPoint
+import dev.ranmt.data.TransportStats
+import dev.ranmt.rust.RustClient
+import dev.ranmt.rust.RustClientHandle
+import dev.ranmt.rust.RustConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,7 +57,13 @@ class MeasurementService : Service() {
     private var sessionId: String? = null
     private var startedAt: Long = 0L
     private var elapsedJob: Job? = null
+    private var rustPollingJob: Job? = null
+    private var rustStartJob: Job? = null
     private var metrics = MetricsAccumulator()
+    private var rustHandle: RustClientHandle? = null
+    private var lastTransportStats: TransportStats? = null
+    private var wifiNetwork: Network? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +74,7 @@ class MeasurementService : Service() {
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         sessionPrefs = SessionPrefs(this)
         settingsStore = AppSettingsStore(this)
+        bindWifiNetwork()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -76,6 +89,8 @@ class MeasurementService : Service() {
 
     override fun onDestroy() {
         stopLocationUpdates()
+        stopRustClient()
+        unbindWifiNetwork()
         elapsedJob?.cancel()
         RunningSessionState.stop()
         super.onDestroy()
@@ -87,7 +102,8 @@ class MeasurementService : Service() {
             serverIp = intent.getStringExtra(EXTRA_SERVER_IP) ?: "",
             serverPort = intent.getIntExtra(EXTRA_SERVER_PORT, 0),
             direction = intent.getStringExtra(EXTRA_DIRECTION) ?: "Uplink",
-            bitrateBps = intent.getIntExtra(EXTRA_BITRATE, 0)
+            bitrateBps = intent.getIntExtra(EXTRA_BITRATE, 0),
+            insecure = intent.getBooleanExtra(EXTRA_INSECURE, false)
         )
         sessionId = UUID.randomUUID().toString()
         startedAt = System.currentTimeMillis()
@@ -100,6 +116,7 @@ class MeasurementService : Service() {
         RunningSessionState.start(id, resumed = false)
         updateConnectionState()
         startElapsedTimer()
+        startRustClient(config)
         startLocationUpdates()
     }
 
@@ -114,12 +131,14 @@ class MeasurementService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         updateConnectionState()
         startElapsedTimer()
+        startRustClient(active.config)
         startLocationUpdates()
     }
 
     private fun stopMeasurement() {
         val id = sessionId ?: return
         stopLocationUpdates()
+        stopRustClient()
         elapsedJob?.cancel()
 
         val endTime = System.currentTimeMillis()
@@ -136,8 +155,8 @@ class MeasurementService : Service() {
             minRsrp = metrics.minRsrp,
             avgRsrp = metrics.avgRsrp(),
             connectionDrops = metrics.connectionDrops,
-            bytesSent = 0,
-            bytesReceived = 0,
+            bytesSent = metrics.bytesSent,
+            bytesReceived = metrics.bytesReceived,
             peakJitterMs = metrics.peakJitter
         )
         repository.finalizeSession(summary, metricsSnapshot)
@@ -190,6 +209,7 @@ class MeasurementService : Service() {
                 val id = sessionId ?: return
                 result.locations.forEach { location ->
                     val snapshot = snapshotRadio()
+                    val transport = lastTransportStats
                     val point = TelemetryPoint(
                         timestamp = location.time,
                         lat = location.latitude,
@@ -202,8 +222,8 @@ class MeasurementService : Service() {
                         pci = snapshot.pci,
                         earfcn = snapshot.earfcn,
                         networkType = snapshot.networkType,
-                        jitterMs = 0.0,
-                        lossPct = 0.0
+                        jitterMs = transport?.jitterMs ?: 0.0,
+                        lossPct = transport?.lossPct ?: 0.0
                     )
                     scope.launch(Dispatchers.IO) {
                         repository.appendTelemetry(id, point)
@@ -227,11 +247,116 @@ class MeasurementService : Service() {
     }
 
     private fun updateConnectionState() {
+        if (rustHandle != null) {
+            return
+        }
         val network = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(network)
         val hasInternet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         val state = if (hasInternet) ConnectionState.Connected else ConnectionState.Reconnecting
         RunningSessionState.updateConnection(state)
+    }
+
+    private fun startRustClient(config: MeasurementConfig) {
+        stopRustClient()
+        rustStartJob?.cancel()
+        rustStartJob = scope.launch(Dispatchers.IO) {
+            val handle = RustClient.start(config) ?: return@launch
+            rustHandle = handle
+            startRustPolling(handle)
+        }
+    }
+
+    private fun startRustPolling(handle: RustClientHandle) {
+        rustPollingJob?.cancel()
+        rustPollingJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val snapshot = RustClient.getStats(handle)
+                if (snapshot != null) {
+                    lastTransportStats = snapshot.transport
+                    snapshot.transport?.let { metrics.updateTransport(it) }
+                    RunningSessionState.updateTransport(snapshot.transport)
+                    RunningSessionState.updateConnection(mapConnectionState(snapshot.state))
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    private fun stopRustClient() {
+        rustStartJob?.cancel()
+        rustStartJob = null
+        rustPollingJob?.cancel()
+        rustPollingJob = null
+        rustHandle?.let { handle ->
+            scope.launch(Dispatchers.IO) {
+                RustClient.stop(handle)
+            }
+        }
+        rustHandle = null
+        lastTransportStats = null
+        RunningSessionState.updateTransport(null)
+    }
+
+    private fun mapConnectionState(state: RustConnectionState): ConnectionState {
+        return when (state) {
+            RustConnectionState.Connected -> ConnectionState.Connected
+            RustConnectionState.Connecting -> ConnectionState.Reconnecting
+            RustConnectionState.Reconnecting -> ConnectionState.Reconnecting
+            RustConnectionState.Disconnected -> ConnectionState.Reconnecting
+        }
+    }
+
+    private fun normalizeServer(config: MeasurementConfig): Pair<String, Int> {
+        val raw = config.serverIp.trim()
+        val idx = raw.lastIndexOf(':')
+        if (idx > 0 && idx == raw.indexOf(':')) {
+            val host = raw.substring(0, idx).trim()
+            val portText = raw.substring(idx + 1).trim()
+            val port = portText.toIntOrNull()
+            if (host.isNotBlank() && port != null && port in 1..65535) {
+                return host to port
+            }
+        }
+        return raw to config.serverPort
+    }
+
+    private fun bindWifiNetwork() {
+        if (networkCallback != null) return
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                wifiNetwork = network
+                connectivityManager.bindProcessToNetwork(network)
+                android.util.Log.i("MeasurementService", "Bound process to Wi-Fi network")
+            }
+
+            override fun onLost(network: Network) {
+                if (wifiNetwork == network) {
+                    connectivityManager.bindProcessToNetwork(null)
+                    wifiNetwork = null
+                    android.util.Log.w("MeasurementService", "Wi-Fi network lost; unbound process")
+                }
+            }
+        }
+        try {
+            connectivityManager.requestNetwork(request, callback)
+            networkCallback = callback
+        } catch (err: SecurityException) {
+            android.util.Log.e("MeasurementService", "Wi-Fi bind requires CHANGE_NETWORK_STATE", err)
+        }
+    }
+
+    private fun unbindWifiNetwork() {
+        networkCallback?.let { callback ->
+            connectivityManager.unregisterNetworkCallback(callback)
+        }
+        networkCallback = null
+        connectivityManager.bindProcessToNetwork(null)
+        wifiNetwork = null
     }
 
     @SuppressLint("MissingPermission")
@@ -351,6 +476,8 @@ class MeasurementService : Service() {
         var totalJitter: Double = 0.0
         var totalLoss: Double = 0.0
         var primaryRat: String? = null
+        var bytesSent: Long = 0
+        var bytesReceived: Long = 0
 
         fun update(point: TelemetryPoint) {
             count += 1
@@ -361,6 +488,14 @@ class MeasurementService : Service() {
             totalLoss += point.lossPct
             if (point.jitterMs > peakJitter) peakJitter = point.jitterMs
             if (primaryRat == null && point.networkType.isNotBlank()) primaryRat = point.networkType
+        }
+
+        fun updateTransport(stats: TransportStats) {
+            stats.txBytes?.let { bytesSent = it }
+            stats.rxBytes?.let { bytesReceived = it }
+            stats.jitterMs?.let { jitter ->
+                if (jitter > peakJitter) peakJitter = jitter
+            }
         }
 
         fun avgRsrp(): Int = if (count == 0) 0 else (sumRsrp / count).toInt()
@@ -388,6 +523,7 @@ class MeasurementService : Service() {
         const val EXTRA_SERVER_PORT = "extra_server_port"
         const val EXTRA_DIRECTION = "extra_direction"
         const val EXTRA_BITRATE = "extra_bitrate"
+        const val EXTRA_INSECURE = "extra_insecure"
 
         fun startIntent(context: Context, config: MeasurementConfig): Intent {
             return Intent(context, MeasurementService::class.java).apply {
@@ -396,6 +532,7 @@ class MeasurementService : Service() {
                 putExtra(EXTRA_SERVER_PORT, config.serverPort)
                 putExtra(EXTRA_DIRECTION, config.direction)
                 putExtra(EXTRA_BITRATE, config.bitrateBps)
+                putExtra(EXTRA_INSECURE, config.insecure)
             }
         }
 
@@ -412,6 +549,7 @@ class MeasurementService : Service() {
                 putExtra(EXTRA_SERVER_PORT, active.config.serverPort)
                 putExtra(EXTRA_DIRECTION, active.config.direction)
                 putExtra(EXTRA_BITRATE, active.config.bitrateBps)
+                putExtra(EXTRA_INSECURE, active.config.insecure)
             }
         }
     }

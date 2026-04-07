@@ -1,9 +1,18 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use quiche::ConnectionId;
 use ranmt_shared::*;
+
+#[cfg(feature = "ffi")]
+uniffi::setup_scaffolding!();
+
+#[cfg(feature = "ffi")]
+mod ffi;
 
 // ─────────────────────────────────────
 // Client Configuration
@@ -21,6 +30,85 @@ pub struct ClientConfig {
     pub cert_fingerprint: Option<String>,
     pub seed: u64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientConnectionState {
+    Connecting,
+    Connected,
+    Reconnecting,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LossJitterSource {
+    ReceivePath,
+    SendPacing,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientSnapshot {
+    pub connection_state: ClientConnectionState,
+    pub last_stats: Option<ServerStats>,
+    pub last_loss: Option<f64>,
+    pub last_jitter_ms: Option<f64>,
+    pub jitter_ewma_ms: Option<f64>,
+    pub loss_jitter_source: Option<LossJitterSource>,
+}
+
+struct SendJitterTracker {
+    prev_send_ms: Option<u64>,
+    jitter_ewma: f64,
+}
+
+impl SendJitterTracker {
+    fn new() -> Self {
+        Self {
+            prev_send_ms: None,
+            jitter_ewma: 0.0,
+        }
+    }
+
+    fn on_send(&mut self, now_ms: u64, expected_interval: Duration) -> f64 {
+        let jitter = match self.prev_send_ms {
+            Some(prev) => {
+                let actual = now_ms.saturating_sub(prev) as f64;
+                let expected = expected_interval.as_millis() as f64;
+                (actual - expected).abs()
+            }
+            None => 0.0,
+        };
+        self.prev_send_ms = Some(now_ms);
+        self.jitter_ewma = 0.9 * self.jitter_ewma + 0.1 * jitter;
+        jitter
+    }
+
+    fn jitter_ewma(&self) -> f64 {
+        self.jitter_ewma
+    }
+}
+
+async fn update_state(
+    state: &Option<Arc<Mutex<ClientSnapshot>>>,
+    new_state: ClientConnectionState,
+) {
+    let Some(shared) = state else {
+        return;
+    };
+    let mut snapshot = shared.lock().await;
+    snapshot.connection_state = new_state;
+}
+
+async fn update_stats(
+    state: &Option<Arc<Mutex<ClientSnapshot>>>,
+    stats: ServerStats,
+) {
+    let Some(shared) = state else {
+        return;
+    };
+    let mut snapshot = shared.lock().await;
+    snapshot.last_stats = Some(stats);
+}
+
 
 impl ClientConfig {
     pub fn sni_hostname(&self) -> &str {
@@ -203,6 +291,33 @@ fn drain_backlog_quic(
 // ─────────────────────────────────────
 
 pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
+    run_client_with_cancel(config, CancellationToken::new()).await
+}
+
+pub async fn run_client_with_cancel(
+    config: ClientConfig,
+    cancel: CancellationToken,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_client_with_state(config, cancel, None).await
+}
+
+pub async fn run_client_with_state(
+    config: ClientConfig,
+    cancel: CancellationToken,
+    state: Option<Arc<Mutex<ClientSnapshot>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(shared) = &state {
+        let mut snapshot = shared.lock().await;
+        *snapshot = ClientSnapshot {
+            connection_state: ClientConnectionState::Connecting,
+            last_stats: None,
+            last_loss: None,
+            last_jitter_ms: None,
+            jitter_ewma_ms: None,
+            loss_jitter_source: None,
+        };
+    }
+
     let session_id = uuid::Uuid::new_v4();
     tracing::info!(session_id = %session_id, "starting RANMT client");
 
@@ -215,10 +330,16 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
     let mut tracker = LossJitterTracker::new();
     let mut mock_gen: Option<MockTelemetry> = None;
     let mut telemetry_backlog: VecDeque<String> = VecDeque::new();
+    let mut send_jitter = SendJitterTracker::new();
 
     let mut test_complete = false;
 
     loop {
+        if cancel.is_cancelled() {
+            update_state(&state, ClientConnectionState::Disconnected).await;
+            return Ok(());
+        }
+        update_state(&state, ClientConnectionState::Connecting).await;
         tracing::info!(
             "Connecting to {} (port {})...",
             config.server_addr,
@@ -274,6 +395,8 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
         let mut pacer = TrafficPacer::with_seq(config.bitrate_bps, datagram_seq);
 
+        let mut shutdown_requested = false;
+
         'inner: loop {
             let quic_timeout = match conn.timeout() {
                 Some(t) if !t.is_zero() => t,
@@ -282,6 +405,22 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
             tokio::select! {
                 biased;
+
+                _ = cancel.cancelled() => {
+                    shutdown_requested = true;
+                    if conn.is_established() {
+                        if let Some(msg) = serialize_message(
+                            &WireMessage::Goodbye(Goodbye {
+                                reason: GoodbyeReason::UserAbort,
+                            })
+                        ) {
+                            let _ = try_send_line(&mut conn, &msg, true);
+                        }
+                        flush_quic(&mut conn, &socket, peer_addr).await;
+                    }
+                    update_state(&state, ClientConnectionState::Disconnected).await;
+                    break 'inner;
+                }
 
                 // QUIC timeout fires
                 _ = tokio::time::sleep(quic_timeout) => {
@@ -345,7 +484,23 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                         &mut payload,
                     );
                     match conn.dgram_send(&payload) {
-                        Ok(_) => pacer.mark_sent(),
+                        Ok(_) => {
+                            pacer.mark_sent();
+                            if let Some(shared) = &state {
+                                let now_ms = current_epoch_ms();
+                                let jitter = send_jitter.on_send(
+                                    now_ms,
+                                    pacer.interval(),
+                                );
+                                let mut snapshot = shared.lock().await;
+                                snapshot.last_loss = Some(0.0);
+                                snapshot.last_jitter_ms = Some(jitter);
+                                snapshot.jitter_ewma_ms = Some(send_jitter.jitter_ewma());
+                                snapshot.loss_jitter_source = Some(
+                                    LossJitterSource::SendPacing,
+                                );
+                            }
+                        }
                         Err(quiche::Error::Done) => {}
                         Err(e) => tracing::warn!(?e, "dgram_send error"),
                     }
@@ -365,6 +520,7 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                     {
                         if !handshake_done {
                             handshake_done = true;
+                            update_state(&state, ClientConnectionState::Connected).await;
                             drain_backlog_quic(&mut conn, &mut telemetry_backlog);
                             tracing::info!("handshake complete");
                         }
@@ -376,6 +532,7 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                         );
                     }
                     WireMessage::ServerStats(s) => {
+                        update_stats(&state, s.clone()).await;
                         display_stats(&s);
                     }
                     _ => {}
@@ -401,6 +558,15 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                                 let arrival = current_epoch_ms();
                                 let (lost, jitter) =
                                     tracker.on_datagram(seq, send_ts, arrival);
+                                if let Some(shared) = &state {
+                                    let mut snapshot = shared.lock().await;
+                                    snapshot.last_loss = Some(tracker.loss_rate());
+                                    snapshot.last_jitter_ms = Some(jitter);
+                                    snapshot.jitter_ewma_ms = Some(tracker.jitter_ewma());
+                                    snapshot.loss_jitter_source = Some(
+                                        LossJitterSource::ReceivePath,
+                                    );
+                                }
                                 display_loss(seq, lost, jitter,
                                     &tracker.loss_rate(),
                                     tracker.jitter_ewma());
@@ -448,6 +614,7 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                 }
                 flush_quic(&mut conn, &socket, peer_addr).await;
                 test_complete = true;
+                update_state(&state, ClientConnectionState::Disconnected).await;
                 break 'inner;
             }
 
@@ -464,12 +631,22 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
             return Ok(());
         }
 
+        if shutdown_requested {
+            return Ok(());
+        }
+
+        update_state(&state, ClientConnectionState::Reconnecting).await;
+
         tracing::info!("Disconnected, reconnecting in 2s...");
 
         let reconnect_deadline = tokio::time::Instant::now()
             + Duration::from_millis(RECONNECT_DELAY_MS);
         loop {
             tokio::select! {
+                _ = cancel.cancelled() => {
+                    update_state(&state, ClientConnectionState::Disconnected).await;
+                    return Ok(());
+                }
                 _ = tokio::time::sleep_until(reconnect_deadline) => break,
                 _ = telemetry_interval.tick() => {
                     let tel = mock_gen.generate();

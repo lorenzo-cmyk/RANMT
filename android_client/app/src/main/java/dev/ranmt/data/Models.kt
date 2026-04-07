@@ -45,8 +45,27 @@ data class MeasurementConfig(
     val serverIp: String,
     val serverPort: Int,
     val direction: String,
-    val bitrateBps: Int
+    val bitrateBps: Int,
+    val insecure: Boolean = false
 )
+
+data class TransportStats(
+    val rttMs: Double?,
+    val txBytes: Long?,
+    val rxBytes: Long?,
+    val cwnd: Long?,
+    val lostPackets: Long?,
+    val sendRateBps: Long?,
+    val lossPct: Double?,
+    val jitterMs: Double?,
+    val jitterEwmaMs: Double?,
+    val lossJitterSource: LossJitterSource?
+)
+
+enum class LossJitterSource {
+    ReceivePath,
+    SendPacing
+}
 
 enum class ConnectionState {
     Connected,

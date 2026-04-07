@@ -35,7 +35,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             serverIp = "192.0.2.10",
             serverPort = 4433,
             direction = "Uplink",
-            bitrateBps = 8000
+            bitrateBps = 8000,
+            insecure = false
         )
     )
         private set

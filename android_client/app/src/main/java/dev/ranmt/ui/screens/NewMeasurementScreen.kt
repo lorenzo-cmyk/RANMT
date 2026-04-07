@@ -26,6 +26,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +45,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.ranmt.data.MeasurementConfig
+import dev.ranmt.rust.RustClient
 
 @Composable
 fun NewMeasurementScreen(
@@ -55,6 +58,7 @@ fun NewMeasurementScreen(
     var serverPort by remember { mutableStateOf(config.serverPort.toString()) }
     var bitrate by remember { mutableStateOf(config.bitrateBps.toString()) }
     var direction by remember { mutableStateOf(config.direction) }
+    var insecure by remember { mutableStateOf(config.insecure) }
 
     val permissionList = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION to "Precise Location",
@@ -67,6 +71,7 @@ fun NewMeasurementScreen(
     var permissionStates by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var allGranted by remember { mutableStateOf(false) }
     var ignoreBatteryOptimizations by remember { mutableStateOf(true) }
+    var rustReady by remember { mutableStateOf(false) }
 
     fun refreshStatus() {
         val states = permissionList.associate { (permission, _) ->
@@ -80,6 +85,7 @@ fun NewMeasurementScreen(
         } else {
             true
         }
+        rustReady = RustClient.isAvailable()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -170,6 +176,28 @@ fun NewMeasurementScreen(
                         }
                     }
                 }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Insecure TLS",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Skip certificate verification (dev only)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    Switch(
+                        checked = insecure,
+                        onCheckedChange = { insecure = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.onSecondary,
+                            checkedTrackColor = MaterialTheme.colorScheme.secondary
+                        )
+                    )
+                }
             }
         }
 
@@ -204,6 +232,11 @@ fun NewMeasurementScreen(
                     label = "Battery optimization",
                     status = if (ignoreBatteryOptimizations) "Disabled" else "Enabled",
                     ready = ignoreBatteryOptimizations
+                )
+                StatusRow(
+                    label = "Rust core",
+                    status = if (rustReady) "Ready" else "Missing",
+                    ready = rustReady
                 )
 
                 if (!allGranted) {
@@ -247,13 +280,14 @@ fun NewMeasurementScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
         Button(
-            enabled = allGranted && ignoreBatteryOptimizations,
+            enabled = allGranted && ignoreBatteryOptimizations && rustReady,
             onClick = {
                 val updated = MeasurementConfig(
                     serverIp = serverIp.trim(),
                     serverPort = serverPort.toIntOrNull() ?: 4433,
                     direction = direction,
-                    bitrateBps = bitrate.toIntOrNull() ?: 8000
+                    bitrateBps = bitrate.toIntOrNull() ?: 8000,
+                    insecure = insecure
                 )
                 onConfigChange(updated)
                 onStart()
