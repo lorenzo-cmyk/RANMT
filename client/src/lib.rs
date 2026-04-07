@@ -34,11 +34,11 @@ impl ClientConfig {
 
 fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-    config.set_cc_algorithm(quiche::CongestionControlAlgorithm::BBR);
-    config.enable_dgram(true, 1024, 1024);
+    config.set_cc_algorithm(quiche::CongestionControlAlgorithm::Bbr2Gcongestion);
+    config.enable_dgram(true, MAX_DGRAM_SIZE, MAX_DGRAM_SIZE);
     config.set_max_recv_udp_payload_size(MAX_DGRAM_SIZE);
     config.set_max_send_udp_payload_size(MAX_DGRAM_SIZE);
-    config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 75);
+    config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000);
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -127,10 +127,13 @@ async fn flush_quic(
 
 fn display_stats(stats: &ServerStats) {
     tracing::info!(
-        "TX={}B | RX={}B | Lost={}",
+        "RTT={:.1}ms | TX={}B | RX={}B | CWND={}B | Lost={} | Rate={}bps",
+        stats.quic_stats.rtt_ms,
         stats.quic_stats.tx_bytes,
         stats.quic_stats.rx_bytes,
+        stats.quic_stats.cwnd,
         stats.quic_stats.lost_packets,
+        stats.quic_stats.send_rate_bps,
     );
 }
 
@@ -185,6 +188,15 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
     let peer_addr = resolve_ipv4(&config.server_addr, config.port)?;
 
+    // Persist stateful counters across reconnects (spec §8.2 rule 4)
+    let test_start = Instant::now();
+    let mut telemetry_seq: u64 = 0;
+    let mut datagram_seq: u64 = 0;
+    let mut tracker = LossJitterTracker::new();
+    let mut mock_gen: Option<MockTelemetry> = None;
+
+    let mut test_complete = false;
+
     loop {
         tracing::info!(
             "Connecting to {} (port {})...",
@@ -215,8 +227,10 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
         let mut handshake_sent = false;
         let mut handshake_done = false;
 
-        let test_start = Instant::now();
-        let mut mock_gen = MockTelemetry::new(test_start);
+        let mut mock_gen = match mock_gen.take() {
+            Some(g) => g,
+            None => MockTelemetry::with_seq(test_start, telemetry_seq),
+        };
 
         // Telemetry timer (1 Hz)
         let mut telemetry_interval =
@@ -234,8 +248,7 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
             tokio::time::MissedTickBehavior::Delay,
         );
 
-        let mut pacer = TrafficPacer::new(config.bitrate_bps);
-        let mut tracker = LossJitterTracker::new();
+        let mut pacer = TrafficPacer::with_seq(config.bitrate_bps, datagram_seq);
 
         'inner: loop {
             let quic_timeout = match conn.timeout() {
@@ -293,6 +306,12 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                             tracing::info!("handshake complete");
                         }
                     }
+                    WireMessage::HandshakeAck(a) => {
+                        tracing::warn!(
+                            err = %a.message,
+                            "server rejected handshake"
+                        );
+                    }
                     WireMessage::ServerStats(s) => {
                         display_stats(&s);
                     }
@@ -306,9 +325,15 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                 loop {
                     match conn.dgram_recv(&mut dgram_buf) {
                         Ok(n) if n > 0 => {
-                            let payload = dgram_buf[..n].to_vec();
+                            if n != MAX_DGRAM_SIZE {
+                                tracing::warn!(
+                                    size = n,
+                                    "DL datagram size mismatch, skipping"
+                                );
+                                continue;
+                            }
                             if let Some((seq, send_ts)) =
-                                decode_traffic_payload(&payload)
+                                decode_traffic_payload(&dgram_buf[..n])
                             {
                                 let arrival = current_epoch_ms();
                                 let (lost, jitter) =
@@ -351,9 +376,10 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                     let _ = conn.stream_send(STREAM_ID, json.as_bytes(), false);
                     let _ = conn.stream_send(STREAM_ID, b"\n", false);
                 } else {
-                    if telemetry_backlog.len() < TELEMETRY_BUFFER_CAP {
-                        telemetry_backlog.push_back(json);
+                    if telemetry_backlog.len() >= TELEMETRY_BUFFER_CAP {
+                        telemetry_backlog.pop_front();
                     }
+                    telemetry_backlog.push_back(json);
                 }
             }
 
@@ -378,8 +404,12 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                 let msg = serde_json::to_string(
                     &WireMessage::Goodbye(Goodbye { reason: GoodbyeReason::TestComplete })
                 ).unwrap();
-                let _ = conn.stream_send(STREAM_ID, msg.as_bytes(), true);
+                let _ = conn.stream_send(STREAM_ID, msg.as_bytes(), false);
+                let _ = conn.stream_send(STREAM_ID, b"\n", false);
                 flush_quic(&mut conn, &socket, peer_addr).await;
+                // Signal stream FIN after flushing
+                let _ = conn.stream_send(STREAM_ID, &[], true);
+                test_complete = true;
                 break 'inner;
             }
 
@@ -392,7 +422,16 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
             }
         }
 
+        if test_complete {
+            return Ok(());
+        }
+
         tracing::info!("Disconnected, reconnecting in 2s...");
+
+        // Persist state across reconnects (spec §8.2 rule 4: never reset seq_nums)
+        telemetry_seq = mock_gen.seq_num;
+        datagram_seq = pacer.next_seq();
+
         tokio::time::sleep(Duration::from_millis(RECONNECT_DELAY_MS)).await;
     }
 }

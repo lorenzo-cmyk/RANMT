@@ -2,7 +2,7 @@ use clap::Parser;
 use ranmt_shared::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
@@ -57,8 +57,8 @@ struct ServerTrafficState {
 
 fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-    config.set_cc_algorithm(quiche::CongestionControlAlgorithm::BBR);
-    config.enable_dgram(true, 1024, 1024);
+    config.set_cc_algorithm(quiche::CongestionControlAlgorithm::Bbr2Gcongestion);
+    config.enable_dgram(true, MAX_DGRAM_SIZE, MAX_DGRAM_SIZE);
     config.set_max_recv_udp_payload_size(MAX_DGRAM_SIZE);
     config.set_max_send_udp_payload_size(MAX_DGRAM_SIZE);
     config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000);
@@ -83,9 +83,9 @@ fn load_server_tls(
 }
 
 fn generate_dev_cert() -> (String, String) {
-    let CertifiedKey { cert, key_pair } =
+    let CertifiedKey { cert, signing_key } =
         generate_simple_self_signed(vec!["ranmt-dev.local".to_string()]).unwrap();
-    (cert.pem(), key_pair.serialize_pem())
+    (cert.pem(), signing_key.serialize_pem())
 }
 
 fn load_or_generate_cert(
@@ -114,15 +114,55 @@ fn load_or_generate_cert(
     }
 }
 
+const MIN_BITRATE_BPS: u32 = 1_000;
+const MAX_BITRATE_BPS: u32 = 1_000_000;
+
+/// Validate handshake fields. Returns an error message if validation fails.
+fn validate_handshake(h: &Handshake) -> Option<String> {
+    if h.bitrate_bps < MIN_BITRATE_BPS || h.bitrate_bps > MAX_BITRATE_BPS {
+        return Some(format!(
+            "bitrate_bps {} out of range [{}, {}]",
+            h.bitrate_bps, MIN_BITRATE_BPS, MAX_BITRATE_BPS
+        ));
+    }
+    // Semver check: must have 3 parts X.Y.Z (e.g. "0.1.0")
+    let parts = h.client_version.split('.').count();
+    if parts < 3 {
+        return Some(format!(
+            "client_version '{}' does not look like semver (expected X.Y.Z)",
+            h.client_version
+        ));
+    }
+    None
+}
+
+fn send_handshake_ack(
+    conn: &mut quiche::Connection,
+    status: HandshakeStatus,
+    message: &str,
+) {
+    let ack = WireMessage::HandshakeAck(HandshakeAck {
+        status,
+        message: message.to_string(),
+    });
+    let json = serde_json::to_string(&ack).unwrap();
+    let _ = conn.stream_send(0, json.as_bytes(), false);
+    let _ = conn.stream_send(0, b"\n", false);
+}
+
 fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
     let s = conn.stats();
+    let path = conn.path_stats().next();
+    let (rtt_ms, cwnd, send_rate_bps) = path
+        .map(|ps| (ps.rtt.as_secs_f64() * 1000.0, ps.cwnd as u64, ps.delivery_rate))
+        .unwrap_or((0.0, 0, 0));
     QuicStats {
-        rtt_ms: 0.0,
+        rtt_ms,
         tx_bytes: s.sent_bytes,
         rx_bytes: s.recv_bytes,
-        cwnd: 0,
+        cwnd,
         lost_packets: s.lost as u64,
-        send_rate_bps: 0,
+        send_rate_bps,
     }
 }
 
@@ -133,7 +173,7 @@ fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
 fn process_stream_messages(
     entry: &mut ActiveConn,
     sessions: &mut HashMap<uuid::Uuid, SessionState>,
-    output_dir: &PathBuf,
+    output_dir: &Path,
 ) {
     let stream_id = STREAM_ID;
     let mut tmp = [0u8; 8192];
@@ -157,6 +197,22 @@ fn process_stream_messages(
         for line in text.split('\n').filter(|s| !s.is_empty()) {
             match serde_json::from_str::<WireMessage>(line) {
                 Ok(WireMessage::Handshake(h)) => {
+                    // For session reconnects, skip validation (already accepted)
+                    if sessions.get(&h.session_id).is_none()
+                        && let Some(err_msg) = validate_handshake(&h) {
+                            tracing::warn!(
+                                session_id = ?h.session_id,
+                                %err_msg,
+                                "handshake rejected"
+                            );
+                            send_handshake_ack(
+                                &mut entry.conn,
+                                HandshakeStatus::Error,
+                                &err_msg,
+                            );
+                            continue;
+                        }
+
                     let path = output_dir
                         .join(format!("session_{}.jsonl", h.session_id));
 
@@ -179,26 +235,33 @@ fn process_stream_messages(
                         sessions.insert(h.session_id, sess);
                     }
 
-                    let ack = WireMessage::HandshakeAck(HandshakeAck {
-                        status: HandshakeStatus::Ok,
-                        message: String::new(),
-                    });
-                    let json = serde_json::to_string(&ack).unwrap();
-                    let _ = entry.conn.stream_send(0, json.as_bytes(), false);
-                    let _ = entry.conn.stream_send(0, b"\n", false);
+                    send_handshake_ack(
+                        &mut entry.conn,
+                        HandshakeStatus::Ok,
+                        "",
+                    );
 
-                    // Initialize traffic pacer for DL
+                    // Initialize traffic pacer for DL, restoring persisted seq
                     if h.direction == Direction::Dl {
                         let interval = calc_traffic_interval(h.bitrate_bps);
                         let mut ivl = tokio::time::interval(interval);
                         ivl.set_missed_tick_behavior(
                             tokio::time::MissedTickBehavior::Delay,
                         );
-                        entry.server_traffic_state =
-                            Some(ServerTrafficState {
-                                interval: ivl,
-                                next_seq: 0,
-                            });
+                        // Restore datagram seq from session state (spec §8.2 rule 4)
+                        if let Some(existing) = sessions.get(&h.session_id) {
+                            entry.server_traffic_state =
+                                Some(ServerTrafficState {
+                                    interval: ivl,
+                                    next_seq: existing.datagram_send_seq,
+                                });
+                        } else {
+                            entry.server_traffic_state =
+                                Some(ServerTrafficState {
+                                    interval: ivl,
+                                    next_seq: 0,
+                                });
+                        }
                     }
 
                     entry.session_id = Some(h.session_id);
@@ -211,21 +274,21 @@ fn process_stream_messages(
                         "handshake complete"
                     );
                 }
-                Ok(WireMessage::Goodbye(_reason)) => {
-                    tracing::info!("client said goodbye");
-                    if let Some(sid) = entry.session_id {
-                        if let Some(sess) = sessions.get_mut(&sid) {
+                Ok(WireMessage::Goodbye(reason)) => {
+                    tracing::info!("client said goodbye (reason={reason:?})");
+                    if let Some(sid) = entry.session_id
+                        && let Some(sess) = sessions.get_mut(&sid) {
                             sess.close_jsonl();
                             sessions.remove(&sid);
                         }
-                    }
+                    // Per spec §9.1: close the QUIC connection immediately.
+                    let _ = entry.conn.close(true, 0x00, b"goodbye");
                 }
                 Ok(WireMessage::ClientTelemetry(tel)) => {
-                    if let Some(sid) = entry.session_id {
-                        if let Some(sess) = sessions.get_mut(&sid) {
+                    if let Some(sid) = entry.session_id
+                        && let Some(sess) = sessions.get_mut(&sid) {
                             sess.write_telemetry(&tel);
                         }
-                    }
                 }
                 Err(e) => {
                     tracing::warn!(%e, "malformed JSON on stream 0");
@@ -248,9 +311,15 @@ fn process_datagrams(
     loop {
         match entry.conn.dgram_recv(&mut dgram_buf) {
             Ok(n) if n > 0 => {
-                let payload = dgram_buf[..n].to_vec();
+                if n != MAX_DGRAM_SIZE {
+                    tracing::warn!(
+                        size = n,
+                        "UL datagram size mismatch, skipping"
+                    );
+                    continue;
+                }
                 if let Some((seq_num, send_ts)) =
-                    decode_traffic_payload(&payload)
+                    decode_traffic_payload(&dgram_buf[..n])
                 {
                     let arrival = current_epoch_ms();
                     let (lost, jitter) = session
@@ -306,12 +375,12 @@ async fn process_connection_periodic(
     }
 
     // Process QUIC timeout
-    if let Some(timeout) = entry.conn.timeout() {
-        if timeout.is_zero() {
-            entry.conn.on_timeout();
-            if entry.conn.is_closed() {
-                return false;
-            }
+    if let Some(timeout) = entry.conn.timeout()
+        && timeout.is_zero()
+    {
+        entry.conn.on_timeout();
+        if entry.conn.is_closed() {
+            return false;
         }
     }
 
@@ -433,16 +502,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Clean up dead connections
                 for scid in to_remove {
-                    if let Some(entry) = active.remove(&scid) {
-                        if let Some(sid) = entry.session_id {
-                            if let Some(sess) = sessions.get_mut(&sid) {
+                    if let Some(entry) = active.remove(&scid)
+                        && let Some(sid) = entry.session_id
+                            && let Some(sess) = sessions.get_mut(&sid) {
+                                // Persist datagram send seq before disconnect
+                                // (spec §8.2 rule 4: never reset datagram seq)
+                                if let Some(ref sts) = entry.server_traffic_state {
+                                    sess.datagram_send_seq = sts.next_seq;
+                                }
                                 tracing::info!(
                                     "Session {sid} conn dropped, marking dormant"
                                 );
                                 sess.mark_dormant();
                             }
-                        }
-                    }
                 }
 
                 // Prune expired dormant sessions
@@ -481,16 +553,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|(scid, _)| *scid)
                     .collect();
                 for scid in &stale_peers {
-                    if let Some(entry) = active.remove(scid) {
-                        if let Some(sid) = entry.session_id {
-                            if let Some(sess) = sessions.get_mut(&sid) {
+                    if let Some(entry) = active.remove(scid)
+                        && let Some(sid) = entry.session_id
+                            && let Some(sess) = sessions.get_mut(&sid) {
+                                // Persist datagram send seq before disconnect
+                                if let Some(ref sts) = entry.server_traffic_state {
+                                    sess.datagram_send_seq = sts.next_seq;
+                                }
                                 sess.mark_dormant();
                                 tracing::info!(
                                     "Session {sid} marked dormant (conn recycled)"
                                 );
                             }
-                        }
-                    }
                 }
 
                 // Attempt accept if no active connection exists for this peer
@@ -563,11 +637,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         process_stream_messages(entry, &mut sessions, output_dir);
 
                         // Process UL datagrams
-                        if let Some(sid) = entry.session_id {
-                            if let Some(sess) = sessions.get_mut(&sid) {
+                        if let Some(sid) = entry.session_id
+                            && let Some(sess) = sessions.get_mut(&sid) {
                                 process_datagrams(entry, sess);
                             }
-                        }
 
                         // Final flush
                         flush_conn(&mut entry.conn, &socket, entry.peer).await;
@@ -578,10 +651,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     // Clean up dead connections
-                    for scid in to_remove {
+                    for scid in to_remove.drain(..) {
                         if let Some(entry) = active.remove(&scid) {
                             if let Some(sid) = entry.session_id {
                                 if let Some(sess) = sessions.get_mut(&sid) {
+                                    // Persist datagram send seq before disconnect
+                                    if let Some(ref sts) = entry.server_traffic_state {
+                                        sess.datagram_send_seq = sts.next_seq;
+                                    }
                                     tracing::info!(
                                         "Session {sid} conn dropped, marking dormant"
                                     );

@@ -16,6 +16,8 @@ pub const MAX_DGRAM_SIZE: usize = 1200;
 pub const TRAFFIC_HEADER_SIZE: usize = 1 + 8 + 8;
 pub const TELEMETRY_BUFFER_CAP: usize = 10_000;
 pub const RECONNECT_DELAY_MS: u64 = 2000;
+/// Server idle timeout (30 seconds). quiche expects microseconds, so multiply
+/// by 1000 at the call site: `set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000)`.
 pub const IDLE_TIMEOUT_MS: u64 = 30_000;
 pub const TELEMETRY_INTERVAL_MS: u64 = 1000;
 pub const STATS_INTERVAL_MS: u64 = 1000;
@@ -97,6 +99,7 @@ pub struct ServerStats {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct QuicStats {
+    /// Round-trip time in milliseconds (0 if no measurement available)
     pub rtt_ms: f64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
@@ -175,6 +178,10 @@ pub fn encode_traffic_payload(seq_num: u64, send_ts: u64, out: &mut [u8; MAX_DGR
     out[17..].fill(0);
 }
 
+/// Decode a traffic payload from a datagram.
+/// Returns `(seq_num, send_ts)` if valid, or `None` if the payload is too
+/// short or has the wrong type byte.  Callers should check `data.len() ==
+/// MAX_DGRAM_SIZE` separately to satisfy spec §10.
 pub fn decode_traffic_payload(data: &[u8]) -> Option<(u64, u64)> {
     if data.len() < TRAFFIC_HEADER_SIZE || data[0] != PAYLOAD_TYPE_TRAFFIC {
         return None;
@@ -201,14 +208,12 @@ pub fn resolve_ipv4(host: &str, port: u16) -> Result<std::net::SocketAddr, Box<d
 /// Convert a target bitrate (bps) into a duration for pacing.
 pub fn calc_traffic_interval(bitrate_bps: u32) -> std::time::Duration {
     let bits_per_dgram = (MAX_DGRAM_SIZE * 8) as u64;
-    let datagrams_per_sec = (bitrate_bps as u64)
-        .saturating_mul(1_000_000)
-        .checked_div(bits_per_dgram)
-        .unwrap_or(0);
-    let interval_ns = if datagrams_per_sec > 0 {
-        1_000_000_000 / datagrams_per_sec
+    // Use floating-point to handle low bitrates where datagrams/sec < 1
+    let datagrams_per_sec = (bitrate_bps as f64) / (bits_per_dgram as f64);
+    let interval_ns = if datagrams_per_sec > 0.0 {
+        (1_000_000_000.0 / datagrams_per_sec) as u64
     } else {
-        1_000_000_000
+        1_000_000_000 // fallback: 1 dgram/s
     };
     std::time::Duration::from_nanos(interval_ns)
 }
@@ -225,19 +230,26 @@ pub struct TrafficPacer {
 
 impl TrafficPacer {
     pub fn new(bitrate_bps: u32) -> Self {
+        Self::with_seq(bitrate_bps, 0)
+    }
+
+    pub fn with_seq(bitrate_bps: u32, next_seq: u64) -> Self {
         Self {
             bits_per_dgram: (MAX_DGRAM_SIZE * 8) as u64,
             bitrate_bps,
-            next_seq: 0,
+            next_seq,
         }
+    }
+
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
     }
 
     pub fn interval(&self) -> std::time::Duration {
         let datagrams_per_sec =
-            (self.bitrate_bps as u64).saturating_mul(1_000_000)
-                / self.bits_per_dgram;
-        let interval_ns = if datagrams_per_sec > 0 {
-            1_000_000_000 / datagrams_per_sec
+            (self.bitrate_bps as f64) / (self.bits_per_dgram as f64);
+        let interval_ns = if datagrams_per_sec > 0.0 {
+            (1_000_000_000.0 / datagrams_per_sec) as u64
         } else {
             1_000_000_000
         };
@@ -265,6 +277,12 @@ pub struct LossJitterTracker {
     prev_arrival_ms: Option<u64>,
     prev_send_ts: Option<u64>,
     jitter_ewma: f64,
+}
+
+impl Default for LossJitterTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LossJitterTracker {
@@ -331,7 +349,11 @@ pub struct SessionState {
     pub client_version: String,
     pub jsonl_path: std::path::PathBuf,
     pub jsonl_file: File,
+    /// Datagram loss/jitter tracking (receiver side, for UL tests)
     pub datagram_tracker: LossJitterTracker,
+    /// Datagram sequence counter (sender side, for DL tests).
+    /// Persisted across reconnects per spec §8.2 rule 4.
+    pub datagram_send_seq: u64,
     pub dormant_since: Option<Instant>,
 }
 
@@ -355,6 +377,7 @@ impl SessionState {
             jsonl_path: jsonl_path.to_owned(),
             jsonl_file,
             datagram_tracker: LossJitterTracker::new(),
+            datagram_send_seq: 0,
             dormant_since: None,
         }
     }
@@ -407,12 +430,16 @@ impl SessionState {
 
 pub struct MockTelemetry {
     test_start: Instant,
-    seq_num: u64,
+    pub seq_num: u64,
 }
 
 impl MockTelemetry {
     pub fn new(test_start: Instant) -> Self {
         Self { test_start, seq_num: 0 }
+    }
+
+    pub fn with_seq(test_start: Instant, seq_num: u64) -> Self {
+        Self { test_start, seq_num }
     }
 
     pub fn generate(&mut self) -> ClientTelemetry {
