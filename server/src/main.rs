@@ -61,8 +61,10 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     // quiche 0.28 exposes BBR via the `Bbr2Gcongestion` variant.
     config.set_cc_algorithm(quiche::CongestionControlAlgorithm::Bbr2Gcongestion);
     config.enable_dgram(true, MAX_DGRAM_SIZE, MAX_DGRAM_SIZE);
-    config.set_max_recv_udp_payload_size(MAX_DGRAM_SIZE);
-    config.set_max_send_udp_payload_size(MAX_DGRAM_SIZE);
+    // Keep QUIC packets at MTU-sized 1500 so 1200-byte DATAGRAM payloads
+    // fit after short-header + packet number + AEAD overhead.
+    config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
+    config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000);
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
@@ -475,8 +477,14 @@ async fn process_connection_periodic(
                 current_epoch_ms(),
                 &mut payload,
             );
-            let _ = entry.conn.dgram_send(&payload);
-            sts.next_seq += 1;
+            match entry.conn.dgram_send(&payload) {
+                Ok(_) | Err(quiche::Error::Done) => {
+                    sts.next_seq += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(?e, "server dgram_send error");
+                }
+            }
         }
     }
 
