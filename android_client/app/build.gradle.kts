@@ -15,8 +15,25 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        fun readEnvValue(key: String): String? {
+            val envFile = rootProject.file(".env")
+            if (!envFile.exists()) return null
+            envFile.readLines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .forEach { line ->
+                    val parts = line.split("=", limit = 2)
+                    if (parts.size == 2 && parts[0].trim() == key) {
+                        return parts[1].trim().trim('"', '\'')
+                    }
+                }
+            return null
+        }
+
         manifestPlaceholders["MAPS_API_KEY"] =
-            (project.findProperty("MAPS_API_KEY") as String?) ?: ""
+            (project.findProperty("MAPS_API_KEY") as String?)
+                ?: readEnvValue("MAPS_KEY")
+                ?: ""
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

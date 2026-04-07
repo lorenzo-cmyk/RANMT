@@ -6,16 +6,20 @@ import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Button
@@ -30,11 +34,24 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.rememberCameraPositionState
 import dev.ranmt.data.ExportDestination
 import dev.ranmt.data.ExportFormat
 import dev.ranmt.data.SessionDetail
@@ -96,6 +113,8 @@ fun SessionDetailScreen(
         RadioPanel(detail)
         Spacer(modifier = Modifier.height(16.dp))
         TransportPanel(detail)
+        Spacer(modifier = Modifier.height(16.dp))
+        MapPanel(detail.telemetry)
         Spacer(modifier = Modifier.height(16.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Button(onClick = { setShowExport(true) }) {
@@ -268,6 +287,91 @@ private fun TransportPanel(detail: SessionDetail) {
 }
 
 @Composable
+private fun MapPanel(points: List<TelemetryPoint>) {
+    val mapHeight = 260.dp
+    val cameraPositionState = rememberCameraPositionState()
+    val (mapLoaded, setMapLoaded) = remember { mutableStateOf(false) }
+    val sampledPoints = remember(points) { sampleTelemetry(points, maxPoints = 200) }
+
+    LaunchedEffect(points, mapLoaded) {
+        if (mapLoaded && points.isNotEmpty()) {
+            val bounds = LatLngBounds.builder().apply {
+                points.forEach { include(LatLng(it.lat, it.lon)) }
+            }.build()
+            cameraPositionState.move(CameraUpdateFactory.newLatLngBounds(bounds, 120))
+        }
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Data Points",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            if (points.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(mapHeight)
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(18.dp)
+                        ),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        text = "No location samples available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                GoogleMap(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(mapHeight)
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(18.dp)
+                        ),
+                    cameraPositionState = cameraPositionState,
+                    properties = MapProperties(isMyLocationEnabled = false),
+                    uiSettings = MapUiSettings(zoomControlsEnabled = false, myLocationButtonEnabled = false),
+                    onMapLoaded = { setMapLoaded(true) }
+                ) {
+                    sampledPoints.forEach { point ->
+                        Marker(
+                            state = MarkerState(position = LatLng(point.lat, point.lon)),
+                            icon = BitmapDescriptorFactory.defaultMarker(lossHue(point.lossPct)),
+                            title = "Sample ${formatDateTime(point.timestamp)}",
+                            snippet = formatMarkerSnippet(point)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LegendChip(color = Color(0xFF2FB7A3), label = "0-1% loss")
+                    LegendChip(color = Color(0xFFF6B64B), label = "1-5% loss")
+                    LegendChip(color = Color(0xFFE76D5A), label = ">5% loss")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Showing ${sampledPoints.size} of ${points.size} samples.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MetricTile(label: String, value: String) {
     Column(modifier = Modifier.width(100.dp)) {
         Text(
@@ -316,6 +420,12 @@ private fun averageSpeed(points: List<TelemetryPoint>): Double {
     return points.map { it.speedMps }.average().takeIf { it.isFinite() } ?: 0.0
 }
 
+private fun sampleTelemetry(points: List<TelemetryPoint>, maxPoints: Int): List<TelemetryPoint> {
+    if (points.size <= maxPoints) return points
+    val stride = (points.size + maxPoints - 1) / maxPoints
+    return points.filterIndexed { index, _ -> (index % stride) == 0 }
+}
+
 private fun formatSpeed(speedMps: Double): String {
     val kmh = speedMps * 3.6
     return "${"%.1f".format(kmh)} km/h"
@@ -323,6 +433,41 @@ private fun formatSpeed(speedMps: Double): String {
 
 private fun formatDb(value: Double): String {
     return "${"%.0f".format(value)} dB"
+}
+
+private fun formatMarkerSnippet(point: TelemetryPoint): String {
+    return listOf(
+        "RSRP ${point.rsrp} dBm",
+        "RSRQ ${point.rsrq} dB",
+        "SINR ${point.sinr} dB",
+        "Jitter ${formatJitter(point.jitterMs)}",
+        "Loss ${formatPct(point.lossPct)}"
+    ).joinToString(" | ")
+}
+
+@Composable
+private fun LegendChip(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .background(color, shape = RoundedCornerShape(50))
+        )
+        Spacer(modifier = Modifier.size(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+        )
+    }
+}
+
+private fun lossHue(lossPct: Double): Float {
+    return when {
+        lossPct <= 1.0 -> BitmapDescriptorFactory.HUE_GREEN
+        lossPct <= 5.0 -> BitmapDescriptorFactory.HUE_YELLOW
+        else -> BitmapDescriptorFactory.HUE_RED
+    }
 }
 
 fun shareFile(context: Context, file: java.io.File) {
