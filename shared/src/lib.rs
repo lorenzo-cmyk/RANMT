@@ -444,20 +444,40 @@ impl SessionState {
 
 pub struct MockTelemetry {
     test_start: Instant,
+    phase_offset: f64,
     pub seq_num: u64,
 }
 
 impl MockTelemetry {
+    fn phase_offset_from_seed(seed: u64) -> f64 {
+        let scrambled = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
+        (scrambled as f64 / u64::MAX as f64) * TAU
+    }
+
     pub fn new(test_start: Instant) -> Self {
-        Self { test_start, seq_num: 0 }
+        Self::with_seed_seq(test_start, 0, 0)
     }
 
     pub fn with_seq(test_start: Instant, seq_num: u64) -> Self {
-        Self { test_start, seq_num }
+        Self::with_seed_seq(test_start, seq_num, 0)
+    }
+
+    pub fn with_seed(test_start: Instant, seed: u64) -> Self {
+        Self::with_seed_seq(test_start, 0, seed)
+    }
+
+    pub fn with_seed_seq(test_start: Instant, seq_num: u64, seed: u64) -> Self {
+        Self {
+            test_start,
+            phase_offset: Self::phase_offset_from_seed(seed),
+            seq_num,
+        }
     }
 
     pub fn generate(&mut self) -> ClientTelemetry {
-        let phase = self.test_start.elapsed().as_secs_f64();
+        let phase = self.test_start.elapsed().as_secs_f64() + self.phase_offset;
         let seq = self.seq_num;
         self.seq_num += 1;
 

@@ -162,6 +162,22 @@ fn send_handshake_ack(
     }
 }
 
+fn close_stream_0(conn: &mut quiche::Connection) {
+    let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Read, 0);
+    let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Write, 0);
+}
+
+fn dcid_key_from_packet(packet: &mut [u8]) -> Option<[u8; 16]> {
+    let hdr = quiche::Header::from_slice(packet, 16).ok()?;
+    if hdr.dcid.len() != 16 {
+        return None;
+    }
+
+    let mut dcid = [0u8; 16];
+    dcid.copy_from_slice(hdr.dcid.as_ref());
+    Some(dcid)
+}
+
 fn remove_binding_for_scid(
     session_bindings: &mut HashMap<uuid::Uuid, [u8; 16]>,
     scid: [u8; 16],
@@ -229,6 +245,7 @@ fn process_stream_messages(
                                 HandshakeStatus::Error,
                                 &err_msg,
                             );
+                            close_stream_0(&mut entry.conn);
                             continue;
                         }
 
@@ -248,6 +265,7 @@ fn process_stream_messages(
                                     HandshakeStatus::Error,
                                     "server error: failed to reopen session file",
                                 );
+                                close_stream_0(&mut entry.conn);
                                 continue;
                             }
                             tracing::info!(
@@ -274,6 +292,7 @@ fn process_stream_messages(
                                     HandshakeStatus::Error,
                                     "server error: cannot open session file",
                                 );
+                                close_stream_0(&mut entry.conn);
                                 continue;
                             }
                         };
@@ -640,23 +659,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     remove_binding_for_scid(&mut session_bindings, *scid);
                 }
 
-                // Route packet to existing connection(s) from the same peer.
+                // Route packet by DCID when possible.
                 let mut delivered = false;
-                for entry in active.values_mut() {
-                    if entry.conn.is_closed() || entry.peer != peer {
-                        continue;
-                    }
+                let dcid_key = dcid_key_from_packet(&mut udp_buf[..len]);
 
-                    match entry.conn.recv(&mut udp_buf[..len], recv_info) {
-                        Ok(_) => delivered = true,
-                        Err(quiche::Error::Done) => {}
-                        Err(e) => {
-                            tracing::debug!(
-                                ?e,
-                                ?peer,
-                                "packet did not match existing connection"
-                            );
+                if let Some(scid) = dcid_key
+                    && let Some(entry) = active.get_mut(&scid)
+                {
+                    if !entry.conn.is_closed() {
+                        match entry.conn.recv(&mut udp_buf[..len], recv_info) {
+                            Ok(_) | Err(quiche::Error::Done) => {}
+                            Err(e) => {
+                                tracing::debug!(
+                                    ?e,
+                                    ?peer,
+                                    dcid = ?scid,
+                                    "failed to feed packet to mapped connection"
+                                );
+                            }
                         }
+
+                        delivered = true;
                     }
                 }
 

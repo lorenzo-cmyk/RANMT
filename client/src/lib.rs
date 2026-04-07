@@ -249,7 +249,11 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
         let mut mock_gen = match mock_gen.take() {
             Some(g) => g,
-            None => MockTelemetry::with_seq(test_start, telemetry_seq),
+            None => MockTelemetry::with_seed_seq(
+                test_start,
+                telemetry_seq,
+                config.seed,
+            ),
         };
 
         // Telemetry timer (1 Hz)
@@ -317,7 +321,10 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                         continue;
                     };
 
-                    if handshake_done && conn.is_established() {
+                    if handshake_done
+                        && conn.is_established()
+                        && telemetry_backlog.is_empty()
+                    {
                         if !try_send_line(&mut conn, &json, false) {
                             push_backlog(&mut telemetry_backlog, json);
                         }
