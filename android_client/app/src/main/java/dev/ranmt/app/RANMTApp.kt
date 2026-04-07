@@ -63,7 +63,7 @@ fun RANMTApp(openRunning: Boolean = false) {
     }
 
     LaunchedEffect(currentRoute) {
-        if (currentRoute == AppDestination.History.route) {
+        if (currentRoute == AppDestination.History.route || currentRoute == AppDestination.NewMeasurement.route) {
             viewModel.refreshActiveSession()
             viewModel.refreshSessions()
         }

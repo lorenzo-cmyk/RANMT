@@ -108,6 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startMeasurement() {
         isRunning = true
+        hasActiveSession = true
         connectionState = ConnectionState.Connected
         activeSessionId = sessionPrefs.loadActive()?.sessionId
         val intent = MeasurementService.startIntent(getApplication(), config)
