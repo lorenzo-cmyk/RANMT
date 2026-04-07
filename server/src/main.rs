@@ -497,9 +497,10 @@ async fn process_connection_periodic(
                 &mut payload,
             );
             match entry.conn.dgram_send(&payload) {
-                Ok(_) | Err(quiche::Error::Done) => {
+                Ok(_) => {
                     sts.next_seq += 1;
                 }
+                Err(quiche::Error::Done) => {}
                 Err(e) => {
                     tracing::warn!(?e, "server dgram_send error");
                 }

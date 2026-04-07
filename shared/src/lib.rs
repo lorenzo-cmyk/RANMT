@@ -245,6 +245,10 @@ impl TrafficPacer {
         self.next_seq
     }
 
+    pub fn mark_sent(&mut self) {
+        self.next_seq += 1;
+    }
+
     pub fn interval(&self) -> std::time::Duration {
         let datagrams_per_sec =
             (self.bitrate_bps as f64) / (self.bits_per_dgram as f64);
@@ -258,7 +262,7 @@ impl TrafficPacer {
 
     pub fn next_payload(&mut self) -> (u64, [u8; MAX_DGRAM_SIZE]) {
         let seq = self.next_seq;
-        self.next_seq += 1;
+        self.mark_sent();
         let send_ts = current_epoch_ms();
         let mut buf = [0u8; MAX_DGRAM_SIZE];
         encode_traffic_payload(seq, send_ts, &mut buf);

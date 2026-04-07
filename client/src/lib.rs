@@ -338,9 +338,15 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                         && conn.is_established()
                         && handshake_done
                 => {
-                    let (_seq, payload) = pacer.next_payload();
+                    let mut payload = [0u8; MAX_DGRAM_SIZE];
+                    encode_traffic_payload(
+                        pacer.next_seq(),
+                        current_epoch_ms(),
+                        &mut payload,
+                    );
                     match conn.dgram_send(&payload) {
-                        Ok(_) | Err(quiche::Error::Done) => {}
+                        Ok(_) => pacer.mark_sent(),
+                        Err(quiche::Error::Done) => {}
                         Err(e) => tracing::warn!(?e, "dgram_send error"),
                     }
                 }
