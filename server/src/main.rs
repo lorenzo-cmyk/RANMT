@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use quiche::ConnectionId;
@@ -45,6 +45,9 @@ struct ActiveConn {
     bitrate: Option<u32>,
     stats_interval: tokio::time::Interval,
     server_traffic_state: Option<ServerTrafficState>,
+    last_rx_at: Instant,
+    last_stream_at: Option<Instant>,
+    last_dgram_at: Option<Instant>,
 }
 
 struct ServerTrafficState {
@@ -120,6 +123,7 @@ fn load_or_generate_cert(
 
 const MIN_BITRATE_BPS: u32 = 1_000;
 const MAX_BITRATE_BPS: u32 = 1_000_000;
+const MEASUREMENT_STATE_LOG_MS: u64 = 5_000;
 
 /// Validate handshake fields. Returns an error message if validation fails.
 fn validate_handshake(h: &Handshake) -> Option<String> {
@@ -145,6 +149,7 @@ fn send_handshake_ack(
     status: HandshakeStatus,
     message: &str,
 ) {
+    tracing::debug!(?status, %message, "sending handshake ack");
     let ack = WireMessage::HandshakeAck(HandshakeAck {
         status,
         message: message.to_string(),
@@ -163,6 +168,7 @@ fn send_handshake_ack(
 }
 
 fn close_stream_0(conn: &mut quiche::Connection) {
+    tracing::debug!("closing stream 0");
     let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Read, 0);
     let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Write, 0);
 }
@@ -201,6 +207,87 @@ fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
     }
 }
 
+fn log_measurement_state(
+    sessions: &HashMap<uuid::Uuid, SessionState>,
+    active: &HashMap<[u8; 16], ActiveConn>,
+    session_bindings: &HashMap<uuid::Uuid, [u8; 16]>,
+) {
+    let now = Instant::now();
+    let total = sessions.len();
+    let dormant = sessions.values().filter(|s| s.is_dormant()).count();
+    let active_sessions = total.saturating_sub(dormant);
+    tracing::info!(
+        total_sessions = total,
+        active_sessions,
+        dormant_sessions = dormant,
+        active_conns = active.len(),
+        "measurement state"
+    );
+
+    for (sid, sess) in sessions {
+        let bound_scid = session_bindings.get(sid).copied();
+        let conn_entry = bound_scid.and_then(|scid| active.get(&scid));
+        let conn_open = conn_entry
+            .map(|entry| !entry.conn.is_closed())
+            .unwrap_or(false);
+        let conn_established = conn_entry
+            .map(|entry| entry.conn.is_established())
+            .unwrap_or(false);
+        let last_rx_age_ms = conn_entry.map(|entry| {
+            now.saturating_duration_since(entry.last_rx_at).as_millis() as u64
+        });
+        let last_stream_age_ms = conn_entry
+            .and_then(|entry| entry.last_stream_at)
+            .map(|ts| now.saturating_duration_since(ts).as_millis() as u64);
+        let last_dgram_age_ms = conn_entry
+            .and_then(|entry| entry.last_dgram_at)
+            .map(|ts| now.saturating_duration_since(ts).as_millis() as u64);
+
+        let state = if sess.is_dormant() {
+            "dormant"
+        } else if conn_open {
+            "active"
+        } else {
+            "disconnected"
+        };
+
+        if sess.direction == Direction::Ul {
+            tracing::debug!(
+                session_id = ?sid,
+                state,
+                direction = ?sess.direction,
+                bitrate_bps = sess.bitrate_bps,
+                conn_open,
+                conn_established,
+                bound_scid = ?bound_scid,
+                peer = ?conn_entry.map(|e| e.peer),
+                last_rx_age_ms,
+                last_stream_age_ms,
+                last_dgram_age_ms,
+                loss_rate = sess.datagram_tracker.loss_rate(),
+                jitter_ewma = sess.datagram_tracker.jitter_ewma(),
+                "measurement detail"
+            );
+        } else {
+            tracing::debug!(
+                session_id = ?sid,
+                state,
+                direction = ?sess.direction,
+                bitrate_bps = sess.bitrate_bps,
+                conn_open,
+                conn_established,
+                bound_scid = ?bound_scid,
+                peer = ?conn_entry.map(|e| e.peer),
+                last_rx_age_ms,
+                last_stream_age_ms,
+                last_dgram_age_ms,
+                datagram_send_seq = sess.datagram_send_seq,
+                "measurement detail"
+            );
+        }
+    }
+}
+
 // ─────────────────────────────────────
 // Stream 0 processing helpers
 // ─────────────────────────────────────
@@ -215,7 +302,9 @@ fn process_stream_messages(
     loop {
         match entry.conn.stream_recv(stream_id, &mut tmp) {
             Ok((n, _fin)) if n > 0 => {
+                tracing::trace!(bytes = n, "stream 0 bytes received");
                 entry.rx_buf.extend_from_slice(&tmp[..n]);
+                entry.last_stream_at = Some(Instant::now());
             }
             Ok(_) | Err(quiche::Error::Done) => break,
             Err(quiche::Error::InvalidStreamState(_)) => break,
@@ -230,8 +319,16 @@ fn process_stream_messages(
         let complete = entry.rx_buf.drain(..=pos).collect::<Vec<u8>>();
         let text = String::from_utf8_lossy(&complete);
         for line in text.split('\n').filter(|s| !s.is_empty()) {
+            tracing::trace!(line = %line, "stream 0 line");
             match serde_json::from_str::<WireMessage>(line) {
                 Ok(WireMessage::Handshake(h)) => {
+                    tracing::info!(
+                        session_id = ?h.session_id,
+                        direction = ?h.direction,
+                        bitrate_bps = h.bitrate_bps,
+                        client_version = %h.client_version,
+                        "handshake received"
+                    );
                     // For session reconnects, skip validation (already accepted)
                     if sessions.get(&h.session_id).is_none()
                         && let Some(err_msg) = validate_handshake(&h) {
@@ -356,6 +453,7 @@ fn process_stream_messages(
                 Ok(WireMessage::ClientTelemetry(tel)) => {
                     if let Some(sid) = entry.session_id
                         && let Some(sess) = sessions.get_mut(&sid) {
+                            tracing::trace!(session_id = ?sid, timestamp = tel.timestamp_ms, "telemetry received");
                             sess.write_telemetry(&tel);
                         }
                 }
@@ -380,6 +478,8 @@ fn process_datagrams(
     loop {
         match entry.conn.dgram_recv(&mut dgram_buf) {
             Ok(n) if n > 0 => {
+                tracing::trace!(bytes = n, "datagram received");
+                entry.last_dgram_at = Some(Instant::now());
                 if n != MAX_DGRAM_SIZE {
                     tracing::warn!(
                         size = n,
@@ -422,6 +522,7 @@ async fn flush_conn(
     loop {
         match conn.send(&mut buf) {
             Ok((n, _info)) => {
+                tracing::trace!(bytes = n, ?peer, "flushing QUIC packet");
                 let _ = socket.send_to(&buf[..n], peer).await;
             }
             Err(quiche::Error::Done) => break,
@@ -440,6 +541,7 @@ async fn process_connection_periodic(
     socket: &UdpSocket,
 ) -> bool {
     if entry.conn.is_closed() {
+        tracing::debug!("connection already closed");
         return false;
     }
 
@@ -447,8 +549,10 @@ async fn process_connection_periodic(
     if let Some(timeout) = entry.conn.timeout()
         && timeout.is_zero()
     {
+        tracing::debug!("QUIC timeout fired");
         entry.conn.on_timeout();
         if entry.conn.is_closed() {
+            tracing::debug!("connection closed after timeout");
             return false;
         }
     }
@@ -462,6 +566,7 @@ async fn process_connection_periodic(
         .await
         .is_ok();
         if stats_fired {
+            tracing::trace!("sending server stats");
             let stats = WireMessage::ServerStats(ServerStats {
                 timestamp_ms: current_epoch_ms(),
                 quic_stats: extract_quic_stats(&entry.conn),
@@ -490,6 +595,7 @@ async fn process_connection_periodic(
         .await
         .is_ok();
         if traffic_fired && entry.conn.is_established() {
+            tracing::trace!(seq = sts.next_seq, "sending DL datagram");
             let mut payload = [0u8; MAX_DGRAM_SIZE];
             encode_traffic_payload(
                 sts.next_seq,
@@ -498,6 +604,10 @@ async fn process_connection_periodic(
             );
             match entry.conn.dgram_send(&payload) {
                 Ok(_) => {
+                    tracing::debug!(
+                        seq = sts.next_seq,
+                        "DL datagram sent"
+                    );
                     sts.next_seq += 1;
                 }
                 Err(quiche::Error::Done) => {}
@@ -535,11 +645,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port = cli.port,
         "starting RANMT server"
     );
+    tracing::debug!(output_dir = %cli.output_dir.display(), "session output directory");
 
     // Load TLS
     let mut quic_cfg = make_quic_config()?;
     let (cert_path, key_path) = load_or_generate_cert(&cli)?;
     if let (Some(c), Some(k)) = (&cert_path, &key_path) {
+        tracing::debug!(cert = %c, key = %k, "loading TLS material");
         load_server_tls(&mut quic_cfg, c, k)?;
     }
 
@@ -549,6 +661,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli.bind_addr, cli.port
     ))
     .await?;
+    tracing::info!(local_addr = %socket.local_addr()?, "UDP socket bound");
 
     let output_dir = &cli.output_dir;
     std::fs::create_dir_all(output_dir)?;
@@ -566,6 +679,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::MissedTickBehavior::Delay,
     );
 
+    let mut measurement_state_interval = tokio::time::interval(
+        Duration::from_millis(MEASUREMENT_STATE_LOG_MS),
+    );
+    measurement_state_interval.set_missed_tick_behavior(
+        tokio::time::MissedTickBehavior::Delay,
+    );
+
     loop {
         tokio::select! {
             biased;
@@ -573,9 +693,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // — Periodic tick: flush pending packets, process timeouts,
             //   send stats/traffic —
             _ = tick_interval.tick() => {
+                tracing::trace!("periodic tick");
                 // Process all connections
                 let mut to_remove = Vec::new();
                 for (scid, entry) in active.iter_mut() {
+                    tracing::trace!(scid = ?scid, "periodic connection sweep");
                     if !entry.conn.is_closed() {
                         let alive = process_connection_periodic(
                             entry, &socket,
@@ -621,6 +743,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
+            _ = measurement_state_interval.tick() => {
+                log_measurement_state(&sessions, &active, &session_bindings);
+            }
+
             // — Incoming UDP datagram —
             result = socket.recv_from(&mut udp_buf) => {
                 let (len, peer) = match result {
@@ -631,6 +757,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                 };
+                tracing::trace!(bytes = len, ?peer, "UDP packet received");
 
                 let local_addr = socket.local_addr()?;
                 let recv_info = quiche::RecvInfo {
@@ -667,6 +794,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(scid) = dcid_key
                     && let Some(entry) = active.get_mut(&scid)
                 {
+                    tracing::trace!(?peer, dcid = ?scid, "packet routed by DCID");
+                    entry.last_rx_at = Instant::now();
                     if !entry.conn.is_closed() {
                         match entry.conn.recv(&mut udp_buf[..len], recv_info) {
                             Ok(_) | Err(quiche::Error::Done) => {}
@@ -685,6 +814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if !delivered {
+                    tracing::debug!(?peer, "no existing connection, accepting");
                     let mut cid_bytes = [0u8; 16];
                     if let Err(e) = getrandom::fill(&mut cid_bytes) {
                         tracing::error!(?e, "failed to generate server connection id");
@@ -720,6 +850,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 bitrate: None,
                                 stats_interval,
                                 server_traffic_state: None,
+                                last_rx_at: Instant::now(),
+                                last_stream_at: None,
+                                last_dgram_at: None,
                             });
                             tracing::info!(?peer, "new connection");
                         }
@@ -732,6 +865,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Process all connections: Stream 0, datagrams, flush.
                 let mut to_remove = Vec::new();
                 for (scid, entry) in active.iter_mut() {
+                    tracing::trace!(scid = ?scid, "post-recv connection sweep");
                     let alive = process_connection_periodic(
                         entry, &socket,
                     ).await;
@@ -771,6 +905,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(previous_scid) = session_bindings.get(&sid).copied()
                         && previous_scid != new_scid
                     {
+                        tracing::info!(
+                            session_id = ?sid,
+                            old_scid = ?previous_scid,
+                            new_scid = ?new_scid,
+                            "rebinding session to new connection"
+                        );
                         if let Some(old_entry) = active.remove(&previous_scid) {
                             if let Some(sess) = sessions.get_mut(&sid)
                                 && let Some(ref sts) = old_entry.server_traffic_state
