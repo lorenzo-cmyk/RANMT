@@ -34,6 +34,7 @@ impl ClientConfig {
 
 fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+    // quiche 0.28 exposes BBR via the `Bbr2Gcongestion` variant.
     config.set_cc_algorithm(quiche::CongestionControlAlgorithm::Bbr2Gcongestion);
     config.enable_dgram(true, MAX_DGRAM_SIZE, MAX_DGRAM_SIZE);
     config.set_max_recv_udp_payload_size(MAX_DGRAM_SIZE);
@@ -54,17 +55,17 @@ fn build_client_connection(
     server_fqdn: &str,
     local: SocketAddr,
     peer: SocketAddr,
-) -> Result<quiche::Connection, quiche::Error> {
+) -> Result<quiche::Connection, Box<dyn std::error::Error>> {
     let mut scid = [0u8; 16];
-    getrandom::fill(&mut scid).unwrap();
+    getrandom::fill(&mut scid)?;
     let scid = ConnectionId::from_ref(&scid);
-    quiche::connect(
+    Ok(quiche::connect(
         Some(server_fqdn),
         &scid,
         local,
         peer,
         quic_cfg,
-    )
+    )?)
 }
 
 // ─────────────────────────────────────
@@ -150,13 +151,35 @@ fn display_loss(
     }
 }
 
-/// Non-blocking interval check — returns true if the interval has fired.
-async fn tick_check(ivl: &mut tokio::time::Interval) -> bool {
-    let mut ready = std::future::ready(false);
-    tokio::select! {
-        _ = ivl.tick() => true,
-        _ = &mut ready => false,
+fn serialize_message(msg: &WireMessage) -> Option<String> {
+    match serde_json::to_string(msg) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!(?e, "failed to serialize stream message");
+            None
+        }
     }
+}
+
+fn try_send_line(conn: &mut quiche::Connection, line: &str, is_final: bool) -> bool {
+    let mut payload = line.as_bytes().to_vec();
+    payload.push(b'\n');
+
+    match conn.stream_send(STREAM_ID, &payload, is_final) {
+        Ok(_) => true,
+        Err(quiche::Error::Done) => false,
+        Err(e) => {
+            tracing::warn!(?e, "stream_send failed");
+            false
+        }
+    }
+}
+
+fn push_backlog(backlog: &mut VecDeque<String>, msg: String) {
+    if backlog.len() >= TELEMETRY_BUFFER_CAP {
+        backlog.pop_front();
+    }
+    backlog.push_back(msg);
 }
 
 /// Non-blocking backlog drain — sends as much as QUIC allows per call.
@@ -165,15 +188,10 @@ fn drain_backlog_quic(
     backlog: &mut VecDeque<String>,
 ) {
     while let Some(msg) = backlog.front() {
-        let mut payload = msg.as_bytes().to_vec();
-        payload.push(b'\n');
-        match conn.stream_send(STREAM_ID, &payload, false) {
-            Ok(_) => { backlog.pop_front(); }
-            Err(quiche::Error::Done) => break,
-            Err(e) => {
-                tracing::warn!(?e, "backlog send failed, dropping");
-                backlog.pop_front();
-            }
+        if try_send_line(conn, msg, false) {
+            backlog.pop_front();
+        } else {
+            break;
         }
     }
 }
@@ -194,6 +212,7 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
     let mut datagram_seq: u64 = 0;
     let mut tracker = LossJitterTracker::new();
     let mut mock_gen: Option<MockTelemetry> = None;
+    let mut telemetry_backlog: VecDeque<String> = VecDeque::new();
 
     let mut test_complete = false;
 
@@ -223,7 +242,6 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
         let mut rx_buf = Vec::new();
         let mut udp_buf = [0u8; MAX_QUIC_PACKET];
-        let mut telemetry_backlog = VecDeque::new();
         let mut handshake_sent = false;
         let mut handshake_done = false;
 
@@ -285,6 +303,36 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                     if conn.recv(&mut udp_buf[..len], recv_info).is_err() {
                         tracing::warn!("recv error, reconnecting");
                         break 'inner;
+                    }
+                }
+
+                // Telemetry generation must continue even during silent links.
+                _ = telemetry_interval.tick() => {
+                    let tel = mock_gen.generate();
+                    let Some(json) = serialize_message(
+                        &WireMessage::ClientTelemetry(tel)
+                    ) else {
+                        continue;
+                    };
+
+                    if handshake_done && conn.is_established() {
+                        if !try_send_line(&mut conn, &json, false) {
+                            push_backlog(&mut telemetry_backlog, json);
+                        }
+                    } else {
+                        push_backlog(&mut telemetry_backlog, json);
+                    }
+                }
+
+                _ = traffic_interval.tick(),
+                    if config.direction == Direction::Ul
+                        && conn.is_established()
+                        && handshake_done
+                => {
+                    let (_seq, payload) = pacer.next_payload();
+                    match conn.dgram_send(&payload) {
+                        Ok(_) | Err(quiche::Error::Done) => {}
+                        Err(e) => tracing::warn!(?e, "dgram_send error"),
                     }
                 }
             }
@@ -360,36 +408,11 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
                     bitrate_bps: config.bitrate_bps,
                     client_version: "0.1.0".into(),
                 });
-                let json = serde_json::to_string(&hs).unwrap();
-                let _ = conn.stream_send(STREAM_ID, json.as_bytes(), false);
-                let _ = conn.stream_send(STREAM_ID, b"\n", false);
-                handshake_sent = true;
-            }
-
-            // Telemetry tick
-            if tick_check(&mut telemetry_interval).await {
-                let tel = mock_gen.generate();
-                let json = serde_json::to_string(
-                    &WireMessage::ClientTelemetry(tel)).unwrap();
-
-                if handshake_done && conn.is_established() {
-                    let _ = conn.stream_send(STREAM_ID, json.as_bytes(), false);
-                    let _ = conn.stream_send(STREAM_ID, b"\n", false);
-                } else {
-                    if telemetry_backlog.len() >= TELEMETRY_BUFFER_CAP {
-                        telemetry_backlog.pop_front();
+                if let Some(json) = serialize_message(&hs) {
+                    if try_send_line(&mut conn, &json, false) {
+                        handshake_sent = true;
                     }
-                    telemetry_backlog.push_back(json);
                 }
-            }
-
-            // Traffic pacer (UL only)
-            if config.direction == Direction::Ul
-                && conn.is_established()
-                && tick_check(&mut traffic_interval).await
-            {
-                let (_seq, payload) = pacer.next_payload();
-                let _ = conn.dgram_send(&payload);
             }
 
             // Drain telemetry backlog after reconnect
@@ -401,14 +424,14 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
             if config.duration > 0
                 && test_start.elapsed() >= Duration::from_secs(config.duration)
             {
-                let msg = serde_json::to_string(
-                    &WireMessage::Goodbye(Goodbye { reason: GoodbyeReason::TestComplete })
-                ).unwrap();
-                let _ = conn.stream_send(STREAM_ID, msg.as_bytes(), false);
-                let _ = conn.stream_send(STREAM_ID, b"\n", false);
+                if let Some(msg) = serialize_message(
+                    &WireMessage::Goodbye(Goodbye {
+                        reason: GoodbyeReason::TestComplete,
+                    })
+                ) {
+                    let _ = try_send_line(&mut conn, &msg, true);
+                }
                 flush_quic(&mut conn, &socket, peer_addr).await;
-                // Signal stream FIN after flushing
-                let _ = conn.stream_send(STREAM_ID, &[], true);
                 test_complete = true;
                 break 'inner;
             }
@@ -428,10 +451,24 @@ pub async fn run_client(config: ClientConfig) -> Result<(), Box<dyn std::error::
 
         tracing::info!("Disconnected, reconnecting in 2s...");
 
+        let reconnect_deadline = tokio::time::Instant::now()
+            + Duration::from_millis(RECONNECT_DELAY_MS);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(reconnect_deadline) => break,
+                _ = telemetry_interval.tick() => {
+                    let tel = mock_gen.generate();
+                    if let Some(json) = serialize_message(
+                        &WireMessage::ClientTelemetry(tel)
+                    ) {
+                        push_backlog(&mut telemetry_backlog, json);
+                    }
+                }
+            }
+        }
+
         // Persist state across reconnects (spec §8.2 rule 4: never reset seq_nums)
         telemetry_seq = mock_gen.seq_num;
         datagram_seq = pacer.next_seq();
-
-        tokio::time::sleep(Duration::from_millis(RECONNECT_DELAY_MS)).await;
     }
 }

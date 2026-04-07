@@ -363,13 +363,12 @@ impl SessionState {
         direction: Direction,
         bitrate_bps: u32,
         jsonl_path: &Path,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
         let jsonl_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(jsonl_path)
-            .expect("failed to open jsonl");
-        Self {
+            .open(jsonl_path)?;
+        Ok(Self {
             session_id,
             direction,
             bitrate_bps,
@@ -379,13 +378,28 @@ impl SessionState {
             datagram_tracker: LossJitterTracker::new(),
             datagram_send_seq: 0,
             dormant_since: None,
-        }
+        })
     }
 
     pub fn write_telemetry(&mut self, tel: &ClientTelemetry) {
-        let line = serde_json::to_string(&WireMessage::ClientTelemetry(tel.clone())).unwrap();
-        let _ = writeln!(self.jsonl_file, "{line}");
-        let _ = self.jsonl_file.sync_all();
+        let line = match serde_json::to_string(
+            &WireMessage::ClientTelemetry(tel.clone())
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(?e, "failed to serialize telemetry");
+                return;
+            }
+        };
+
+        if let Err(e) = writeln!(self.jsonl_file, "{line}") {
+            tracing::error!(?e, "failed to append telemetry JSONL line");
+            return;
+        }
+
+        if let Err(e) = self.jsonl_file.sync_all() {
+            tracing::error!(?e, "failed to sync telemetry JSONL file");
+        }
     }
 
     pub fn mark_dormant(&mut self) {
@@ -405,13 +419,13 @@ impl SessionState {
         self.dormant_since.is_some()
     }
 
-    pub fn wake(&mut self) {
+    pub fn wake(&mut self) -> std::io::Result<()> {
         self.dormant_since = None;
         self.jsonl_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.jsonl_path)
-            .expect("failed to reopen jsonl");
+            .open(&self.jsonl_path)?;
+        Ok(())
     }
 
     pub fn close_jsonl(&mut self) {

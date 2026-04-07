@@ -1,6 +1,7 @@
 use clap::Parser;
 use ranmt_shared::*;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,7 +14,7 @@ use quiche::ConnectionId;
 #[command(name = "ranmt-server")]
 struct Cli {
     #[arg(long, default_value = "0.0.0.0")]
-    bind_addr: String,
+    bind_addr: Ipv4Addr,
 
     #[arg(short = 'p', long)]
     port: u16,
@@ -57,6 +58,7 @@ struct ServerTrafficState {
 
 fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+    // quiche 0.28 exposes BBR via the `Bbr2Gcongestion` variant.
     config.set_cc_algorithm(quiche::CongestionControlAlgorithm::Bbr2Gcongestion);
     config.enable_dgram(true, MAX_DGRAM_SIZE, MAX_DGRAM_SIZE);
     config.set_max_recv_udp_payload_size(MAX_DGRAM_SIZE);
@@ -82,10 +84,10 @@ fn load_server_tls(
     Ok(())
 }
 
-fn generate_dev_cert() -> (String, String) {
+fn generate_dev_cert() -> Result<(String, String), rcgen::Error> {
     let CertifiedKey { cert, signing_key } =
-        generate_simple_self_signed(vec!["ranmt-dev.local".to_string()]).unwrap();
-    (cert.pem(), signing_key.serialize_pem())
+        generate_simple_self_signed(vec!["ranmt-dev.local".to_string()])?;
+    Ok((cert.pem(), signing_key.serialize_pem()))
 }
 
 fn load_or_generate_cert(
@@ -97,7 +99,7 @@ fn load_or_generate_cert(
             Some(key_path.to_string_lossy().to_string()),
         )),
         (None, None) => {
-            let (cert_pem, key_pem) = generate_dev_cert();
+            let (cert_pem, key_pem) = generate_dev_cert()?;
             let tmp = std::env::temp_dir();
             let cert_path = tmp.join("ranmt-dev-cert.pem");
             let key_path = tmp.join("ranmt-dev-key.pem");
@@ -145,9 +147,24 @@ fn send_handshake_ack(
         status,
         message: message.to_string(),
     });
-    let json = serde_json::to_string(&ack).unwrap();
-    let _ = conn.stream_send(0, json.as_bytes(), false);
-    let _ = conn.stream_send(0, b"\n", false);
+    let Ok(json) = serde_json::to_string(&ack) else {
+        tracing::warn!("failed to serialize handshake ack");
+        return;
+    };
+    let mut line = json.into_bytes();
+    line.push(b'\n');
+    if let Err(e) = conn.stream_send(0, &line, false)
+        && !matches!(e, quiche::Error::Done)
+    {
+        tracing::warn!(?e, "failed to send handshake ack");
+    }
+}
+
+fn remove_binding_for_scid(
+    session_bindings: &mut HashMap<uuid::Uuid, [u8; 16]>,
+    scid: [u8; 16],
+) {
+    session_bindings.retain(|_, bound_scid| *bound_scid != scid);
 }
 
 fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
@@ -218,19 +235,46 @@ fn process_stream_messages(
 
                     if let Some(existing) = sessions.get_mut(&h.session_id) {
                         if existing.is_dormant() {
-                            existing.wake();
+                            if let Err(e) = existing.wake() {
+                                tracing::error!(
+                                    session_id = ?h.session_id,
+                                    ?e,
+                                    "failed to wake session jsonl file"
+                                );
+                                send_handshake_ack(
+                                    &mut entry.conn,
+                                    HandshakeStatus::Error,
+                                    "server error: failed to reopen session file",
+                                );
+                                continue;
+                            }
                             tracing::info!(
                                 session_id = ?h.session_id,
                                 "session reconnected, waking up"
                             );
                         }
                     } else {
-                        let mut sess = SessionState::new(
+                        let mut sess = match SessionState::new(
                             h.session_id,
                             h.direction,
                             h.bitrate_bps,
                             &path,
-                        );
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::error!(
+                                    session_id = ?h.session_id,
+                                    ?e,
+                                    "failed to create session file"
+                                );
+                                send_handshake_ack(
+                                    &mut entry.conn,
+                                    HandshakeStatus::Error,
+                                    "server error: cannot open session file",
+                                );
+                                continue;
+                            }
+                        };
                         sess.client_version = h.client_version.clone();
                         sessions.insert(h.session_id, sess);
                     }
@@ -281,6 +325,10 @@ fn process_stream_messages(
                             sess.close_jsonl();
                             sessions.remove(&sid);
                         }
+                    entry.session_id = None;
+                    entry.direction = None;
+                    entry.bitrate = None;
+                    entry.server_traffic_state = None;
                     // Per spec §9.1: close the QUIC connection immediately.
                     let _ = entry.conn.close(true, 0x00, b"goodbye");
                 }
@@ -386,29 +434,40 @@ async fn process_connection_periodic(
 
     // Send server stats on interval
     if entry.session_id.is_some() {
-        let mut ready = std::future::ready(false);
-        let stats_fired = tokio::select! {
-            _ = entry.stats_interval.tick() => true,
-            _ = &mut ready => false,
-        };
+        let stats_fired = tokio::time::timeout(
+            Duration::ZERO,
+            entry.stats_interval.tick(),
+        )
+        .await
+        .is_ok();
         if stats_fired {
             let stats = WireMessage::ServerStats(ServerStats {
                 timestamp_ms: current_epoch_ms(),
                 quic_stats: extract_quic_stats(&entry.conn),
             });
-            let json = serde_json::to_string(&stats).unwrap();
-            let _ = entry.conn.stream_send(0, json.as_bytes(), false);
-            let _ = entry.conn.stream_send(0, b"\n", false);
+            match serde_json::to_string(&stats) {
+                Ok(json) => {
+                    let mut line = json.into_bytes();
+                    line.push(b'\n');
+                    if let Err(e) = entry.conn.stream_send(0, &line, false)
+                        && !matches!(e, quiche::Error::Done)
+                    {
+                        tracing::warn!(?e, "failed to send server stats");
+                    }
+                }
+                Err(e) => tracing::warn!(?e, "failed to serialize server stats"),
+            }
         }
     }
 
     // Traffic pacer (DL only)
     if let Some(sts) = entry.server_traffic_state.as_mut() {
-        let mut ready = std::future::ready(false);
-        let traffic_fired = tokio::select! {
-            _ = sts.interval.tick() => true,
-            _ = &mut ready => false,
-        };
+        let traffic_fired = tokio::time::timeout(
+            Duration::ZERO,
+            sts.interval.tick(),
+        )
+        .await
+        .is_ok();
         if traffic_fired && entry.conn.is_established() {
             let mut payload = [0u8; MAX_DGRAM_SIZE];
             encode_traffic_payload(
@@ -468,6 +527,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut active: HashMap<[u8; 16], ActiveConn> = HashMap::new();
     let mut sessions: HashMap<uuid::Uuid, SessionState> = HashMap::new();
+    let mut session_bindings: HashMap<uuid::Uuid, [u8; 16]> = HashMap::new();
     let mut udp_buf = vec![0u8; MAX_QUIC_PACKET];
 
     // Poll interval for periodic server tasks (flushing, timeouts)
@@ -515,6 +575,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                                 sess.mark_dormant();
                             }
+                    remove_binding_for_scid(&mut session_bindings, scid);
                 }
 
                 // Prune expired dormant sessions
@@ -526,6 +587,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         true
                     }
+                });
+                session_bindings.retain(|sid, scid| {
+                    sessions.contains_key(sid) && active.contains_key(scid)
                 });
             }
 
@@ -565,20 +629,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "Session {sid} marked dormant (conn recycled)"
                                 );
                             }
+                    remove_binding_for_scid(&mut session_bindings, *scid);
                 }
 
-                // Attempt accept if no active connection exists for this peer
-                let has_active =
-                    active.values().any(|e| e.peer == peer && !e.conn.is_closed());
+                // Route packet to existing connection(s) from the same peer.
+                let mut delivered = false;
+                for entry in active.values_mut() {
+                    if entry.conn.is_closed() || entry.peer != peer {
+                        continue;
+                    }
 
-                if !has_active {
+                    match entry.conn.recv(&mut udp_buf[..len], recv_info) {
+                        Ok(_) => delivered = true,
+                        Err(quiche::Error::Done) => {}
+                        Err(e) => {
+                            tracing::debug!(
+                                ?e,
+                                ?peer,
+                                "packet did not match existing connection"
+                            );
+                        }
+                    }
+                }
+
+                if !delivered {
                     let mut cid_bytes = [0u8; 16];
-                    getrandom::fill(&mut cid_bytes).unwrap();
+                    if let Err(e) = getrandom::fill(&mut cid_bytes) {
+                        tracing::error!(?e, "failed to generate server connection id");
+                        continue;
+                    }
                     let scid = ConnectionId::from_ref(&cid_bytes);
                     match quiche::accept(&scid, None, local_addr, peer, &mut quic_cfg) {
                         Ok(mut conn) => {
                             // Feed the initial CHLO packet
-                            let _ = conn.recv(&mut udp_buf[..len], recv_info);
+                            if let Err(e) = conn.recv(&mut udp_buf[..len], recv_info) {
+                                tracing::debug!(?e, "failed to process initial client packet");
+                                continue;
+                            }
 
                             // Flush handshake response immediately
                             flush_conn(&mut conn, &socket, peer).await;
@@ -606,69 +693,92 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Err(e) => {
                             tracing::debug!(?e, "accept failed (may be retransmit)");
-                            continue;
                         }
                     }
-                } else {
-                    // Feed UDP data to matching connections
-                    for entry in active.values_mut() {
-                        if !entry.conn.is_closed() && entry.peer == peer {
-                            let _ = entry.conn.recv(&mut udp_buf[..len], recv_info);
-                        }
-                    }
+                }
 
-                    // Process all connections: Stream 0, datagrams, flush
-                    let mut to_remove = Vec::new();
-                    for (scid, entry) in active.iter_mut() {
-                        let alive = process_connection_periodic(
-                            entry, &socket,
-                        ).await;
-                        if !alive || entry.conn.is_closed() {
-                            to_remove.push(*scid);
-                        }
+                // Process all connections: Stream 0, datagrams, flush.
+                let mut to_remove = Vec::new();
+                for (scid, entry) in active.iter_mut() {
+                    let alive = process_connection_periodic(
+                        entry, &socket,
+                    ).await;
+                    if !alive || entry.conn.is_closed() {
+                        to_remove.push(*scid);
                     }
+                }
 
-                    // Second pass: read stream + datagrams
-                    for (scid, entry) in active.iter_mut() {
-                        if entry.conn.is_closed() {
-                            continue;
-                        }
-                        // Process Stream 0 messages
-                        process_stream_messages(entry, &mut sessions, output_dir);
+                let mut rebinds: Vec<(uuid::Uuid, [u8; 16])> = Vec::new();
+
+                // Second pass: read stream + datagrams
+                for (scid, entry) in active.iter_mut() {
+                    if entry.conn.is_closed() {
+                        continue;
+                    }
+                    // Process Stream 0 messages
+                    process_stream_messages(entry, &mut sessions, output_dir);
+
+                    if let Some(sid) = entry.session_id {
+                        rebinds.push((sid, *scid));
 
                         // Process UL datagrams
-                        if let Some(sid) = entry.session_id
-                            && let Some(sess) = sessions.get_mut(&sid) {
-                                process_datagrams(entry, sess);
-                            }
-
-                        // Final flush
-                        flush_conn(&mut entry.conn, &socket, entry.peer).await;
-
-                        if entry.conn.is_closed() {
-                            to_remove.push(*scid);
+                        if let Some(sess) = sessions.get_mut(&sid) {
+                            process_datagrams(entry, sess);
                         }
                     }
 
-                    // Clean up dead connections
-                    for scid in to_remove.drain(..) {
-                        if let Some(entry) = active.remove(&scid) {
-                            if let Some(sid) = entry.session_id {
-                                if let Some(sess) = sessions.get_mut(&sid) {
-                                    // Persist datagram send seq before disconnect
-                                    if let Some(ref sts) = entry.server_traffic_state {
-                                        sess.datagram_send_seq = sts.next_seq;
-                                    }
-                                    tracing::info!(
-                                        "Session {sid} conn dropped, marking dormant"
-                                    );
-                                    sess.mark_dormant();
+                    // Final flush
+                    flush_conn(&mut entry.conn, &socket, entry.peer).await;
+
+                    if entry.conn.is_closed() {
+                        to_remove.push(*scid);
+                    }
+                }
+
+                for (sid, new_scid) in rebinds {
+                    if let Some(previous_scid) = session_bindings.get(&sid).copied()
+                        && previous_scid != new_scid
+                    {
+                        if let Some(old_entry) = active.remove(&previous_scid) {
+                            if let Some(sess) = sessions.get_mut(&sid)
+                                && let Some(ref sts) = old_entry.server_traffic_state
+                            {
+                                sess.datagram_send_seq =
+                                    sess.datagram_send_seq.max(sts.next_seq);
+                            }
+
+                            tracing::info!(
+                                session_id = ?sid,
+                                old_scid = ?previous_scid,
+                                new_scid = ?new_scid,
+                                "session rebound to newer connection"
+                            );
+                            to_remove.retain(|s| *s != previous_scid);
+                        }
+                    }
+
+                    session_bindings.insert(sid, new_scid);
+                }
+
+                // Clean up dead connections
+                for scid in to_remove.drain(..) {
+                    if let Some(entry) = active.remove(&scid) {
+                        if let Some(sid) = entry.session_id {
+                            if let Some(sess) = sessions.get_mut(&sid) {
+                                // Persist datagram send seq before disconnect
+                                if let Some(ref sts) = entry.server_traffic_state {
+                                    sess.datagram_send_seq = sts.next_seq;
                                 }
-                            } else {
-                                tracing::info!("Unknown connection dropped");
+                                tracing::info!(
+                                    "Session {sid} conn dropped, marking dormant"
+                                );
+                                sess.mark_dormant();
                             }
+                        } else {
+                            tracing::info!("Unknown connection dropped");
                         }
                     }
+                    remove_binding_for_scid(&mut session_bindings, scid);
                 }
 
                 // Prune expired dormant sessions
@@ -680,6 +790,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         true
                     }
+                });
+                session_bindings.retain(|sid, scid| {
+                    sessions.contains_key(sid) && active.contains_key(scid)
                 });
             }
         }

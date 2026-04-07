@@ -62,6 +62,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    if cli.insecure && cli.cert_fingerprint.is_some() {
+        return Err("--cert-fingerprint and --insecure are mutually exclusive".into());
+    }
+
+    if cli.cert_fingerprint.is_some() {
+        return Err("--cert-fingerprint is not implemented yet; use --insecure for dev or omit for CA verification".into());
+    }
+
     let config = ClientConfig {
         server_addr: cli.server,
         server_fqdn: None,
