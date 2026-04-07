@@ -23,12 +23,14 @@ data class TelemetryPoint(
     val timestamp: Long,
     val lat: Double,
     val lon: Double,
+    val speedMps: Double = 0.0,
     val rsrp: Int,
     val rsrq: Int,
     val sinr: Int,
     val cellId: String,
     val pci: Int,
     val earfcn: Int,
+    val networkType: String = "Unknown",
     val jitterMs: Double,
     val lossPct: Double
 )
@@ -51,3 +53,26 @@ enum class ConnectionState {
     Buffering,
     Reconnecting
 }
+
+enum class ExportFormat {
+    Jsonl,
+    Csv
+}
+
+enum class ExportDestination {
+    Share,
+    Downloads
+}
+
+enum class AccuracyMode {
+    Balanced,
+    High
+}
+
+data class AppSettings(
+    val samplingIntervalMs: Long = 1000L,
+    val accuracyMode: AccuracyMode = AccuracyMode.High,
+    val defaultExportFormat: ExportFormat = ExportFormat.Csv,
+    val defaultExportDestination: ExportDestination = ExportDestination.Share,
+    val includeMetadataInCsv: Boolean = true
+)

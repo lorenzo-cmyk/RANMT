@@ -76,12 +76,14 @@ object SampleData {
                 timestamp = t,
                 lat = baseLat + radius * cos(angle),
                 lon = baseLon + radius * sin(angle),
+                speedMps = 9.0 + (2 * sin(index / 5.0)),
                 rsrp = -90 + (8 * sin(index / 8.0)).toInt(),
                 rsrq = -10 + (2 * cos(index / 5.0)).toInt(),
                 sinr = 12 + (4 * sin(index / 6.0)).toInt(),
                 cellId = "CELL-${100 + index % 8}",
                 pci = 200 + index % 10,
                 earfcn = 6300 + index % 30,
+                networkType = "LTE",
                 jitterMs = jitter,
                 lossPct = loss
             )

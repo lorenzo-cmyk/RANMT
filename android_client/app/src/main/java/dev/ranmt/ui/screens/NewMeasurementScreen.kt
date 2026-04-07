@@ -1,6 +1,11 @@
 package dev.ranmt.ui.screens
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +31,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import dev.ranmt.data.MeasurementConfig
 
 @Composable
@@ -35,10 +42,27 @@ fun NewMeasurementScreen(
     onConfigChange: (MeasurementConfig) -> Unit,
     onStart: () -> Unit
 ) {
+    val context = LocalContext.current
     var serverIp by remember { mutableStateOf(config.serverIp) }
     var serverPort by remember { mutableStateOf(config.serverPort.toString()) }
     var bitrate by remember { mutableStateOf(config.bitrateBps.toString()) }
     var direction by remember { mutableStateOf(config.direction) }
+
+    val permissionList = listOf(
+        Manifest.permission.ACCESS_FINE_LOCATION to "Precise Location",
+        Manifest.permission.ACCESS_COARSE_LOCATION to "Coarse Location",
+        Manifest.permission.READ_PHONE_STATE to "Phone State",
+        Manifest.permission.POST_NOTIFICATIONS to "Notifications"
+    )
+    val allGranted = permissionList.all { (permission, _) ->
+        ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val powerManager = context.getSystemService(PowerManager::class.java)
+    val ignoreBatteryOptimizations = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+    } else {
+        true
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -122,6 +146,7 @@ fun NewMeasurementScreen(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Button(
+                enabled = allGranted,
                 onClick = {
                     val updated = MeasurementConfig(
                         serverIp = serverIp.trim(),
@@ -135,6 +160,47 @@ fun NewMeasurementScreen(
             ) {
                 Text("Start")
             }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Permissions",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                permissionList.forEach { (permission, label) ->
+                    val granted = ContextCompat.checkSelfPermission(context, permission) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    Text(
+                        text = "$label: ${if (granted) "Granted" else "Required"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (granted) 0.7f else 1f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val intent = Intent().apply {
+                    action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                    } else {
+                        Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                    }
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                context.startActivity(intent)
+            },
+            enabled = !ignoreBatteryOptimizations
+        ) {
+            Text(if (ignoreBatteryOptimizations) "Battery Optimization Disabled" else "Disable Battery Optimization")
         }
 
         Spacer(modifier = Modifier.height(18.dp))

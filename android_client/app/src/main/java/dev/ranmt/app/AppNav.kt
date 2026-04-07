@@ -19,6 +19,7 @@ sealed class AppDestination(val route: String, val label: String) {
     data object NewMeasurement : AppDestination("new", "New")
     data object SessionDetail : AppDestination("details/{id}", "Details")
     data object Running : AppDestination("running", "Running")
+    data object Settings : AppDestination("settings", "Settings")
 }
 
 @Composable

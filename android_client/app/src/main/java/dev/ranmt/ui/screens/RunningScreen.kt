@@ -2,6 +2,8 @@ package dev.ranmt.ui.screens
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
@@ -21,15 +23,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Power
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,43 +38,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.MeasurementConfig
-import dev.ranmt.service.MeasurementService
-import kotlin.random.Random
+import dev.ranmt.service.RunningUiState
+import dev.ranmt.service.RunningSessionState
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 @Composable
 fun RunningScreen(
     config: MeasurementConfig,
-    connectionState: ConnectionState,
-    onStop: () -> Unit,
-    onStateChange: (ConnectionState) -> Unit
+    runningState: RunningUiState,
+    onStop: () -> Unit
 ) {
     val context = LocalContext.current
-    var seconds by remember { mutableIntStateOf(0) }
 
     DisposableEffect(Unit) {
         val activity = context as? Activity
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        context.startForegroundService(Intent(context, MeasurementService::class.java))
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            context.stopService(Intent(context, MeasurementService::class.java))
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            seconds += 1
-            if (seconds % 12 == 0) {
-                val next = when (connectionState) {
-                    ConnectionState.Connected -> ConnectionState.Buffering
-                    ConnectionState.Buffering -> ConnectionState.Reconnecting
-                    ConnectionState.Reconnecting -> ConnectionState.Connected
-                }
-                onStateChange(next)
-            }
         }
     }
 
@@ -83,16 +65,86 @@ fun RunningScreen(
             style = MaterialTheme.typography.displayMedium,
             color = MaterialTheme.colorScheme.onBackground
         )
+        if (runningState.resumed) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "Session resumed after restart.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = { RunningSessionState.clearResumed() }) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+        }
+        if (runningState.locationPermissionMissing) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "Location permission missing. Telemetry paused.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = {
+                        val intent = Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    }) {
+                        Text("Open App Settings")
+                    }
+                }
+            }
+        }
         Text(
             text = "${config.serverIp}:${config.serverPort} | ${config.direction} | ${config.bitrateBps} bps",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
         )
+        runningState.lastPoint?.let { point ->
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${point.networkType} | RSRP ${point.rsrp} dBm | SINR ${point.sinr} dB | ${String.format("%.1f", point.speedMps)} m/s",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+            )
+            if (point.cellId.isBlank() || point.networkType == "Unknown") {
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Cell info unavailable. Some devices restrict radio metrics.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(14.dp))
 
-        TimerCard(seconds = seconds, state = connectionState)
+        TimerCard(seconds = runningState.elapsedSec, state = runningState.connectionState)
         Spacer(modifier = Modifier.height(16.dp))
-        SparklineRow()
+        SparklineRow(
+            rsrp = runningState.rsrpHistory,
+            sinr = runningState.sinrHistory
+        )
         Spacer(modifier = Modifier.height(18.dp))
 
         Box(
@@ -178,16 +230,22 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
 }
 
 @Composable
-private fun SparklineRow() {
+private fun SparklineRow(rsrp: List<Int>, sinr: List<Int>) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SparklineCard(label = "RSRP", modifier = Modifier.weight(1f))
-        SparklineCard(label = "RTT / Jitter", modifier = Modifier.weight(1f))
+        SparklineCard(label = "RSRP", values = rsrp, modifier = Modifier.weight(1f))
+        SparklineCard(label = "SINR", values = sinr, modifier = Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun SparklineCard(label: String, modifier: Modifier = Modifier) {
-    val values = remember { List(30) { Random.nextFloat() } }
+private fun SparklineCard(label: String, values: List<Int>, modifier: Modifier = Modifier) {
+    val safeValues = remember(values) {
+        if (values.isEmpty()) List(2) { 0f }
+        else values.map { it.toFloat() }
+    }
+    val min = safeValues.minOrNull() ?: 0f
+    val max = safeValues.maxOrNull() ?: 1f
+    val range = (max - min).takeIf { it > 0f } ?: 1f
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
@@ -201,12 +259,14 @@ private fun SparklineCard(label: String, modifier: Modifier = Modifier) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Canvas(modifier = Modifier.fillMaxWidth().height(60.dp)) {
-                val step = size.width / (values.size - 1)
-                for (i in 0 until values.lastIndex) {
+                val step = size.width / (safeValues.size - 1)
+                for (i in 0 until safeValues.lastIndex) {
+                    val normalizedA = (safeValues[i] - min) / range
+                    val normalizedB = (safeValues[i + 1] - min) / range
                     drawLine(
                         color = Color(0xFF4A8CFF),
-                        start = androidx.compose.ui.geometry.Offset(i * step, size.height * (1 - values[i])),
-                        end = androidx.compose.ui.geometry.Offset((i + 1) * step, size.height * (1 - values[i + 1])),
+                        start = androidx.compose.ui.geometry.Offset(i * step, size.height * (1 - normalizedA)),
+                        end = androidx.compose.ui.geometry.Offset((i + 1) * step, size.height * (1 - normalizedB)),
                         strokeWidth = 4f
                     )
                 }

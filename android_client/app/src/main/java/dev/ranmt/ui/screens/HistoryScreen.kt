@@ -21,11 +21,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,7 +52,8 @@ import dev.ranmt.ui.formatPct
 fun HistoryScreen(
     sessions: List<SessionSummary>,
     onOpen: (String) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val (pendingDelete, setPendingDelete) = remember { mutableStateOf<SessionSummary?>(null) }
 
@@ -59,32 +62,54 @@ fun HistoryScreen(
             .fillMaxSize()
             .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {
-        Text(
-            text = "History",
-            style = MaterialTheme.typography.displayMedium,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            text = "Recorded drive tests on this device.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column {
+                Text(
+                    text = "History",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Recorded drive tests on this device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                )
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Outlined.Settings, contentDescription = "Settings")
+            }
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            itemsIndexed(sessions) { index, session ->
-                AnimatedVisibility(
-                    visible = true,
-                    enter = fadeIn(tween(delayMillis = index * 60)) +
-                        slideInVertically(tween(delayMillis = index * 60)) { it / 3 }
-                ) {
-                    SessionCard(
-                        session = session,
-                        onOpen = onOpen,
-                        onDelete = { setPendingDelete(session) }
-                    )
+        if (sessions.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No sessions yet. Start a new measurement to see results here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                )
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                itemsIndexed(sessions) { index, session ->
+                    AnimatedVisibility(
+                        visible = true,
+                        enter = fadeIn(tween(delayMillis = index * 60)) +
+                            slideInVertically(tween(delayMillis = index * 60)) { it / 3 }
+                    ) {
+                        SessionCard(
+                            session = session,
+                            onOpen = onOpen,
+                            onDelete = { setPendingDelete(session) }
+                        )
+                    }
                 }
             }
         }

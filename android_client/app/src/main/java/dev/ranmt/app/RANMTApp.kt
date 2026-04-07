@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -20,7 +22,9 @@ import dev.ranmt.ui.MainViewModel
 import dev.ranmt.ui.screens.HistoryScreen
 import dev.ranmt.ui.screens.NewMeasurementScreen
 import dev.ranmt.ui.screens.RunningScreen
+import dev.ranmt.ui.screens.SettingsScreen
 import dev.ranmt.ui.screens.SessionDetailScreen
+import dev.ranmt.ui.screens.saveFileToDownloads
 import dev.ranmt.ui.screens.shareFile
 import dev.ranmt.ui.theme.RANMTTheme
 
@@ -32,6 +36,18 @@ fun RANMTApp() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val context = LocalContext.current
+    val runningState by viewModel.runningState.collectAsState()
+
+    LaunchedEffect(runningState.sessionId, viewModel.hasActiveSession) {
+        if (runningState.sessionId != null || viewModel.hasActiveSession) {
+            if (currentRoute != AppDestination.Running.route) {
+                navController.navigate(AppDestination.Running.route) {
+                    launchSingleTop = true
+                    popUpTo(AppDestination.History.route)
+                }
+            }
+        }
+    }
 
     RANMTTheme {
         Scaffold(
@@ -66,7 +82,8 @@ fun RANMTApp() {
                                 viewModel.loadDetail(id)
                                 navController.navigate("details/$id")
                             },
-                            onDelete = { id -> viewModel.deleteSession(id) }
+                            onDelete = { id -> viewModel.deleteSession(id) },
+                            onOpenSettings = { navController.navigate(AppDestination.Settings.route) }
                         )
                     }
                     composable(AppDestination.NewMeasurement.route) {
@@ -82,12 +99,11 @@ fun RANMTApp() {
                     composable(AppDestination.Running.route) {
                         RunningScreen(
                             config = viewModel.config,
-                            connectionState = viewModel.connectionState,
+                            runningState = runningState,
                             onStop = {
                                 viewModel.stopMeasurement()
                                 navController.popBackStack(AppDestination.NewMeasurement.route, false)
-                            },
-                            onStateChange = viewModel::updateConnectionState
+                            }
                         )
                     }
                     composable(AppDestination.SessionDetail.route) { backStack ->
@@ -103,12 +119,25 @@ fun RANMTApp() {
                                     viewModel.clearDetail()
                                     navController.popBackStack()
                                 },
-                                onExport = {
-                                    val file = viewModel.exportSession(id)
-                                    if (file != null) shareFile(context, file)
+                                sessionFileSize = viewModel.sessionFileSize(id),
+                                onExport = { format, destination ->
+                                    val file = viewModel.exportSession(id, format)
+                                    if (file != null) {
+                                        when (destination) {
+                                            dev.ranmt.data.ExportDestination.Share -> shareFile(context, file)
+                                            dev.ranmt.data.ExportDestination.Downloads -> saveFileToDownloads(context, file)
+                                        }
+                                    }
                                 }
                             )
                         }
+                    }
+                    composable(AppDestination.Settings.route) {
+                        SettingsScreen(
+                            settings = viewModel.settings,
+                            onUpdate = viewModel::updateSettings,
+                            onBack = { navController.popBackStack() }
+                        )
                     }
                 }
             }

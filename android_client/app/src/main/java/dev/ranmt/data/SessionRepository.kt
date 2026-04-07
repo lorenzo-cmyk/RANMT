@@ -9,58 +9,160 @@ class SessionRepository(private val context: Context) {
     private val sessionsDir = File(context.filesDir, "sessions")
     private val indexFile = File(sessionsDir, "index.json")
 
-    fun listSessions(): List<SessionSummary> {
-        ensureSeeded()
-        return readIndex()
-    }
+    fun listSessions(): List<SessionSummary> = readIndex()
 
     fun getSessionDetail(id: String): SessionDetail? {
-        ensureSeeded()
-        val detailFile = File(sessionsDir, "session_$id.json")
+        val detailFile = sessionFile(id)
         if (!detailFile.exists()) return null
-        return detailFromJson(JSONObject(detailFile.readText()))
+        val telemetry = mutableListOf<TelemetryPoint>()
+        var summary: SessionSummary? = null
+        var metrics: SessionMetrics? = null
+
+        detailFile.readLines().forEach { line ->
+            if (line.isBlank()) return@forEach
+            val json = JSONObject(line)
+            when (json.optString("type")) {
+                "summary" -> summary = summaryFromJson(json.getJSONObject("payload"))
+                "metrics" -> metrics = metricsFromJson(json.getJSONObject("payload"))
+                "telemetry" -> telemetry.add(telemetryFromJson(json.getJSONObject("payload")))
+            }
+        }
+
+        val resolvedSummary = summary ?: buildSummary(id, telemetry)
+        val resolvedMetrics = metrics ?: buildMetrics(telemetry)
+        return SessionDetail(summary = resolvedSummary, metrics = resolvedMetrics, telemetry = telemetry)
     }
 
     fun deleteSession(id: String) {
-        ensureSeeded()
-        File(sessionsDir, "session_$id.json").delete()
-        val summaries = readIndex().filterNot { it.id == id }
-        writeIndex(summaries)
+        sessionFile(id).delete()
+        writeIndex(readIndex().filterNot { it.id == id })
+    }
+
+    fun startSession(sessionId: String, startedAt: Long, config: MeasurementConfig) {
+        ensureDir()
+        val file = sessionFile(sessionId)
+        if (!file.exists()) {
+            val startEvent = JSONObject().apply {
+                put("type", "start")
+                put("payload", JSONObject().apply {
+                    put("id", sessionId)
+                    put("startedAt", startedAt)
+                    put("serverIp", config.serverIp)
+                    put("serverPort", config.serverPort)
+                    put("direction", config.direction)
+                    put("bitrateBps", config.bitrateBps)
+                })
+            }
+            file.writeText(startEvent.toString() + "\n")
+        }
+    }
+
+    fun appendTelemetry(sessionId: String, point: TelemetryPoint) {
+        val line = JSONObject().apply {
+            put("type", "telemetry")
+            put("payload", telemetryToJson(point))
+        }.toString()
+        sessionFile(sessionId).appendText(line + "\n")
+    }
+
+    fun finalizeSession(summary: SessionSummary, metrics: SessionMetrics) {
+        val file = sessionFile(summary.id)
+        if (file.exists()) {
+            file.appendText(JSONObject().apply {
+                put("type", "summary")
+                put("payload", summaryToJson(summary))
+            }.toString() + "\n")
+            file.appendText(JSONObject().apply {
+                put("type", "metrics")
+                put("payload", metricsToJson(metrics))
+            }.toString() + "\n")
+        }
+        val summaries = (readIndex().filterNot { it.id == summary.id } + summary)
+            .sortedByDescending { it.startedAt }
+        val pruned = pruneSessions(summaries)
+        writeIndex(pruned)
     }
 
     fun exportSessionAsJsonl(id: String): File? {
-        val detail = getSessionDetail(id) ?: return null
-        val file = File(context.cacheDir, "ranmt_session_${detail.summary.id}.jsonl")
-        val lines = mutableListOf<String>()
-        lines.add(JSONObject().apply {
-            put("type", "summary")
-            put("payload", summaryToJson(detail.summary))
-        }.toString())
-        lines.add(JSONObject().apply {
-            put("type", "metrics")
-            put("payload", metricsToJson(detail.metrics))
-        }.toString())
-        detail.telemetry.forEach { point ->
-            lines.add(JSONObject().apply {
-                put("type", "telemetry")
-                put("payload", telemetryToJson(point))
-            }.toString())
-        }
-        file.writeText(lines.joinToString("\n"))
+        val source = sessionFile(id)
+        if (!source.exists()) return null
+        val file = File(context.cacheDir, "ranmt_session_$id.jsonl")
+        file.writeText(source.readText())
         return file
     }
 
-    private fun ensureSeeded() {
-        if (indexFile.exists()) return
-        if (!sessionsDir.exists()) sessionsDir.mkdirs()
-        val sessions = SampleData.sessions()
-        val summaries = sessions.map { it.summary }
-        writeIndex(summaries)
-        sessions.forEach { detail ->
-            val detailFile = File(sessionsDir, "session_${detail.summary.id}.json")
-            detailFile.writeText(detailToJson(detail).toString())
+    fun exportSessionAsCsv(id: String, includeMetadata: Boolean): File? {
+        val detail = getSessionDetail(id) ?: return null
+        val file = File(context.cacheDir, "ranmt_session_$id.csv")
+        val meta = if (includeMetadata) {
+            listOf(
+                "# session_id=${detail.summary.id}",
+                "# started_at=${detail.summary.startedAt}",
+                "# duration_sec=${detail.summary.durationSec}",
+                "# avg_jitter_ms=${String.format("%.2f", detail.summary.averageJitterMs)}",
+                "# loss_pct=${String.format("%.2f", detail.summary.lossPct)}",
+                "# max_rsrp=${detail.metrics.maxRsrp}",
+                "# min_rsrp=${detail.metrics.minRsrp}",
+                "# avg_rsrp=${detail.metrics.avgRsrp}",
+                "# peak_jitter_ms=${String.format("%.2f", detail.metrics.peakJitterMs)}"
+            )
+        } else {
+            emptyList()
         }
+        val header = listOf(
+            "timestamp",
+            "lat",
+            "lon",
+            "speed_mps",
+            "rsrp",
+            "rsrq",
+            "sinr",
+            "cell_id",
+            "pci",
+            "earfcn",
+            "network_type",
+            "jitter_ms",
+            "loss_pct"
+        ).joinToString(",")
+        val rows = detail.telemetry.map { point ->
+            listOf(
+                point.timestamp,
+                point.lat,
+                point.lon,
+                String.format("%.2f", point.speedMps),
+                point.rsrp,
+                point.rsrq,
+                point.sinr,
+                point.cellId,
+                point.pci,
+                point.earfcn,
+                point.networkType,
+                String.format("%.2f", point.jitterMs),
+                String.format("%.2f", point.lossPct)
+            ).joinToString(",")
+        }
+        file.writeText((meta + header + rows).joinToString("\n"))
+        return file
     }
+
+    fun getSessionFileSize(id: String): Long? {
+        val file = sessionFile(id)
+        return if (file.exists()) file.length() else null
+    }
+
+    private fun pruneSessions(summaries: List<SessionSummary>): List<SessionSummary> {
+        if (summaries.size <= MAX_SESSIONS) return summaries
+        val keep = summaries.take(MAX_SESSIONS)
+        val remove = summaries.drop(MAX_SESSIONS)
+        remove.forEach { sessionFile(it.id).delete() }
+        return keep
+    }
+
+    private fun ensureDir() {
+        if (!sessionsDir.exists()) sessionsDir.mkdirs()
+    }
+
+    private fun sessionFile(id: String) = File(sessionsDir, "session_$id.jsonl")
 
     private fun readIndex(): List<SessionSummary> {
         if (!indexFile.exists()) return emptyList()
@@ -71,6 +173,7 @@ class SessionRepository(private val context: Context) {
     }
 
     private fun writeIndex(summaries: List<SessionSummary>) {
+        ensureDir()
         val json = JSONArray()
         summaries.forEach { summary ->
             json.put(summaryToJson(summary))
@@ -78,24 +181,35 @@ class SessionRepository(private val context: Context) {
         indexFile.writeText(json.toString())
     }
 
-    private fun detailToJson(detail: SessionDetail): JSONObject {
-        return JSONObject().apply {
-            put("summary", summaryToJson(detail.summary))
-            put("metrics", metricsToJson(detail.metrics))
-            put("telemetry", JSONArray().apply {
-                detail.telemetry.forEach { put(telemetryToJson(it)) }
-            })
-        }
+    private fun buildSummary(id: String, telemetry: List<TelemetryPoint>): SessionSummary {
+        val start = telemetry.firstOrNull()?.timestamp ?: System.currentTimeMillis()
+        val end = telemetry.lastOrNull()?.timestamp ?: start
+        val duration = ((end - start) / 1000).toInt().coerceAtLeast(0)
+        val avgJitter = telemetry.map { it.jitterMs }.average().takeIf { it.isFinite() } ?: 0.0
+        val avgLoss = telemetry.map { it.lossPct }.average().takeIf { it.isFinite() } ?: 0.0
+        val rat = telemetry.firstOrNull()?.networkType ?: "Unknown"
+        return SessionSummary(
+            id = id,
+            startedAt = start,
+            durationSec = duration,
+            averageJitterMs = avgJitter,
+            lossPct = avgLoss,
+            primaryRat = rat
+        )
     }
 
-    private fun detailFromJson(json: JSONObject): SessionDetail {
-        val summary = summaryFromJson(json.getJSONObject("summary"))
-        val metrics = metricsFromJson(json.getJSONObject("metrics"))
-        val telemetryJson = json.getJSONArray("telemetry")
-        val telemetry = (0 until telemetryJson.length()).map { index ->
-            telemetryFromJson(telemetryJson.getJSONObject(index))
-        }
-        return SessionDetail(summary = summary, metrics = metrics, telemetry = telemetry)
+    private fun buildMetrics(telemetry: List<TelemetryPoint>): SessionMetrics {
+        val rsrpValues = telemetry.map { it.rsrp }
+        val avgRsrp = rsrpValues.average().takeIf { it.isFinite() }?.toInt() ?: 0
+        return SessionMetrics(
+            maxRsrp = rsrpValues.maxOrNull() ?: 0,
+            minRsrp = rsrpValues.minOrNull() ?: 0,
+            avgRsrp = avgRsrp,
+            connectionDrops = telemetry.count { it.lossPct > 5.0 },
+            bytesSent = 0,
+            bytesReceived = 0,
+            peakJitterMs = telemetry.maxOfOrNull { it.jitterMs } ?: 0.0
+        )
     }
 
     private fun summaryToJson(summary: SessionSummary): JSONObject {
@@ -149,12 +263,14 @@ class SessionRepository(private val context: Context) {
             put("timestamp", point.timestamp)
             put("lat", point.lat)
             put("lon", point.lon)
+            put("speedMps", point.speedMps)
             put("rsrp", point.rsrp)
             put("rsrq", point.rsrq)
             put("sinr", point.sinr)
             put("cellId", point.cellId)
             put("pci", point.pci)
             put("earfcn", point.earfcn)
+            put("networkType", point.networkType)
             put("jitterMs", point.jitterMs)
             put("lossPct", point.lossPct)
         }
@@ -165,14 +281,20 @@ class SessionRepository(private val context: Context) {
             timestamp = json.getLong("timestamp"),
             lat = json.getDouble("lat"),
             lon = json.getDouble("lon"),
-            rsrp = json.getInt("rsrp"),
-            rsrq = json.getInt("rsrq"),
-            sinr = json.getInt("sinr"),
-            cellId = json.getString("cellId"),
-            pci = json.getInt("pci"),
-            earfcn = json.getInt("earfcn"),
-            jitterMs = json.getDouble("jitterMs"),
-            lossPct = json.getDouble("lossPct")
+            speedMps = json.optDouble("speedMps", 0.0),
+            rsrp = json.optInt("rsrp", 0),
+            rsrq = json.optInt("rsrq", 0),
+            sinr = json.optInt("sinr", 0),
+            cellId = json.optString("cellId", ""),
+            pci = json.optInt("pci", 0),
+            earfcn = json.optInt("earfcn", 0),
+            networkType = json.optString("networkType", "Unknown"),
+            jitterMs = json.optDouble("jitterMs", 0.0),
+            lossPct = json.optDouble("lossPct", 0.0)
         )
+    }
+
+    companion object {
+        private const val MAX_SESSIONS = 100
     }
 }
