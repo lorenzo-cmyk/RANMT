@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.MeasurementConfig
 import dev.ranmt.data.ExportFormat
@@ -20,6 +21,8 @@ import dev.ranmt.service.RunningSessionState
 import dev.ranmt.service.RunningUiState
 import dev.ranmt.service.SessionPrefs
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SessionRepository(application)
@@ -32,7 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var config by mutableStateOf(
         MeasurementConfig(
-            serverIp = "192.0.2.10",
+            serverIp = "192.168.178.20",
             serverPort = 4433,
             direction = "Uplink",
             bitrateBps = 8000,
@@ -50,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var hasActiveSession by mutableStateOf(false)
         private set
 
+    var activeSessionId by mutableStateOf<String?>(null)
+        private set
+
     var suppressAutoNavigate by mutableStateOf(false)
         private set
 
@@ -64,8 +70,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshActiveSession() {
-        hasActiveSession = sessionPrefs.hasActive()
+        val active = sessionPrefs.loadActive()
+        activeSessionId = active?.sessionId
+        hasActiveSession = active != null
         isRunning = hasActiveSession
+        if (active != null) {
+            selectedDetail = null
+        }
     }
 
     fun updateSettings(updated: AppSettings) {
@@ -98,17 +109,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startMeasurement() {
         isRunning = true
         connectionState = ConnectionState.Connected
+        activeSessionId = sessionPrefs.loadActive()?.sessionId
         val intent = MeasurementService.startIntent(getApplication(), config)
         getApplication<Application>().startForegroundService(intent)
+        refreshActiveSession()
     }
 
     fun stopMeasurement() {
         isRunning = false
         hasActiveSession = false
+        activeSessionId = null
         suppressAutoNavigate = true
         val intent = MeasurementService.stopIntent(getApplication())
         getApplication<Application>().startService(intent)
-        refreshSessions()
+        viewModelScope.launch {
+            delay(750)
+            refreshSessions()
+        }
     }
 
     fun updateConnectionState(state: ConnectionState) {

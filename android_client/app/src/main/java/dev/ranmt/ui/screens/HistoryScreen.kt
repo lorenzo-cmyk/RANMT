@@ -51,6 +51,7 @@ import dev.ranmt.ui.formatPct
 @Composable
 fun HistoryScreen(
     sessions: List<SessionSummary>,
+    activeSessionId: String?,
     onOpen: (String) -> Unit,
     onDelete: (String) -> Unit,
     onOpenSettings: () -> Unit
@@ -106,6 +107,7 @@ fun HistoryScreen(
                     ) {
                         SessionCard(
                             session = session,
+                            isActive = session.id == activeSessionId,
                             onOpen = onOpen,
                             onDelete = { setPendingDelete(session) }
                         )
@@ -141,6 +143,7 @@ fun HistoryScreen(
 @Composable
 private fun SessionCard(
     session: SessionSummary,
+    isActive: Boolean,
     onOpen: (String) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -185,6 +188,13 @@ private fun SessionCard(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
+                    if (isActive) {
+                        Text(
+                            text = "In progress",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
                 }
                 Icon(
                     imageVector = Icons.Outlined.Delete,

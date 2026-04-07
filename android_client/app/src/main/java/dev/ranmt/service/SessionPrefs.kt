@@ -18,6 +18,19 @@ class SessionPrefs(context: Context) {
             .apply()
     }
 
+    fun saveTransport(bytesSent: Long, bytesReceived: Long) {
+        prefs.edit()
+            .putLong(KEY_BYTES_SENT, bytesSent)
+            .putLong(KEY_BYTES_RECEIVED, bytesReceived)
+            .apply()
+    }
+
+    fun saveConnectionDrops(drops: Int) {
+        prefs.edit()
+            .putInt(KEY_CONNECTION_DROPS, drops)
+            .apply()
+    }
+
     fun clearActive() {
         prefs.edit().clear().apply()
     }
@@ -34,17 +47,26 @@ class SessionPrefs(context: Context) {
         val direction = prefs.getString(KEY_DIRECTION, "Uplink") ?: "Uplink"
         val bitrate = prefs.getInt(KEY_BITRATE, 0)
         val insecure = prefs.getBoolean(KEY_INSECURE, false)
+        val bytesSent = prefs.getLong(KEY_BYTES_SENT, 0L)
+        val bytesReceived = prefs.getLong(KEY_BYTES_RECEIVED, 0L)
+        val connectionDrops = prefs.getInt(KEY_CONNECTION_DROPS, 0)
         return ActiveSession(
             sessionId = id,
             startedAt = startedAt,
-            config = MeasurementConfig(serverIp, serverPort, direction, bitrate, insecure)
+            config = MeasurementConfig(serverIp, serverPort, direction, bitrate, insecure),
+            bytesSent = bytesSent,
+            bytesReceived = bytesReceived,
+            connectionDrops = connectionDrops
         )
     }
 
     data class ActiveSession(
         val sessionId: String,
         val startedAt: Long,
-        val config: MeasurementConfig
+        val config: MeasurementConfig,
+        val bytesSent: Long,
+        val bytesReceived: Long,
+        val connectionDrops: Int
     )
 
     companion object {
@@ -56,5 +78,8 @@ class SessionPrefs(context: Context) {
         private const val KEY_DIRECTION = "direction"
         private const val KEY_BITRATE = "bitrate"
         private const val KEY_INSECURE = "insecure"
+        private const val KEY_BYTES_SENT = "bytes_sent"
+        private const val KEY_BYTES_RECEIVED = "bytes_received"
+        private const val KEY_CONNECTION_DROPS = "connection_drops"
     }
 }

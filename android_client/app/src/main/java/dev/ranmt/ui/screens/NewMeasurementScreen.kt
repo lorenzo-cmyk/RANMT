@@ -51,6 +51,7 @@ import dev.ranmt.rust.RustClient
 fun NewMeasurementScreen(
     config: MeasurementConfig,
     onConfigChange: (MeasurementConfig) -> Unit,
+    allowStart: Boolean,
     onStart: () -> Unit
 ) {
     val context = LocalContext.current
@@ -184,7 +185,7 @@ fun NewMeasurementScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Skip certificate verification (dev only)",
+                            text = "Skip certificate verification.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
@@ -280,7 +281,7 @@ fun NewMeasurementScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
         Button(
-            enabled = allGranted && ignoreBatteryOptimizations && rustReady,
+            enabled = allowStart && allGranted && ignoreBatteryOptimizations && rustReady,
             onClick = {
                 val updated = MeasurementConfig(
                     serverIp = serverIp.trim(),

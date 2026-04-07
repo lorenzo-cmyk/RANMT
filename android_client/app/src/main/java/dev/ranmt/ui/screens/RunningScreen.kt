@@ -127,7 +127,7 @@ fun RunningScreen(
 
         InfoTile(
             title = "Radio",
-            subtitle = "RAN and signal quality",
+            subtitle = "RAN and signal quality.",
             entries = listOf(
                 "Network" to networkType,
                 "RSRP" to "$rsrp dBm",
@@ -141,7 +141,7 @@ fun RunningScreen(
         Spacer(modifier = Modifier.height(12.dp))
         InfoTile(
             title = "Transport",
-            subtitle = "QUIC stats",
+            subtitle = "QUIC statistics.",
             entries = listOf(
                 "RTT" to "$rtt ms",
                 "Loss" to "$loss %",
@@ -155,7 +155,7 @@ fun RunningScreen(
         Spacer(modifier = Modifier.height(12.dp))
         InfoTile(
             title = "Location",
-            subtitle = "GPS telemetry",
+            subtitle = "GPS telemetry.",
             entries = listOf(
                 "Speed" to "$speed m/s",
                 "Latitude" to lat,
@@ -325,7 +325,7 @@ private fun StatusTile(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Session health checks",
+                    text = "Session health checks.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 )

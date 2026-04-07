@@ -55,6 +55,21 @@ class SessionRepository(private val context: Context) {
             }
             file.writeText(startEvent.toString() + "\n")
         }
+
+        val summaries = readIndex()
+        if (summaries.none { it.id == sessionId }) {
+            val placeholder = SessionSummary(
+                id = sessionId,
+                startedAt = startedAt,
+                durationSec = 0,
+                averageJitterMs = 0.0,
+                lossPct = 0.0,
+                primaryRat = "Unknown"
+            )
+            val updated = (summaries + placeholder)
+                .sortedByDescending { it.startedAt }
+            writeIndex(updated)
+        }
     }
 
     fun appendTelemetry(sessionId: String, point: TelemetryPoint) {
@@ -63,6 +78,48 @@ class SessionRepository(private val context: Context) {
             put("payload", telemetryToJson(point))
         }.toString()
         sessionFile(sessionId).appendText(line + "\n")
+    }
+
+    fun aggregateTelemetry(sessionId: String): TelemetryAggregate? {
+        val detailFile = sessionFile(sessionId)
+        if (!detailFile.exists()) return null
+        var count = 0
+        var maxRsrp = Int.MIN_VALUE
+        var minRsrp = Int.MAX_VALUE
+        var sumRsrp = 0L
+        var totalJitter = 0.0
+        var totalLoss = 0.0
+        var peakJitter = 0.0
+        var primaryRat: String? = null
+
+        detailFile.readLines().forEach { line ->
+            if (line.isBlank()) return@forEach
+            val json = JSONObject(line)
+            if (json.optString("type") != "telemetry") return@forEach
+            val point = telemetryFromJson(json.getJSONObject("payload"))
+            count += 1
+            sumRsrp += point.rsrp
+            maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
+            minRsrp = minRsrp.coerceAtMost(point.rsrp)
+            totalJitter += point.jitterMs
+            totalLoss += point.lossPct
+            if (point.jitterMs > peakJitter) peakJitter = point.jitterMs
+            if (primaryRat == null && point.networkType.isNotBlank()) {
+                primaryRat = point.networkType
+            }
+        }
+
+        if (count == 0) return null
+        return TelemetryAggregate(
+            count = count,
+            maxRsrp = maxRsrp,
+            minRsrp = minRsrp,
+            sumRsrp = sumRsrp,
+            totalJitter = totalJitter,
+            totalLoss = totalLoss,
+            peakJitter = peakJitter,
+            primaryRat = primaryRat
+        )
     }
 
     fun finalizeSession(summary: SessionSummary, metrics: SessionMetrics) {

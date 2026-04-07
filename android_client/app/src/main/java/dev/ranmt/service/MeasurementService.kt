@@ -33,6 +33,7 @@ import dev.ranmt.data.SessionMetrics
 import dev.ranmt.data.SessionRepository
 import dev.ranmt.data.SessionSummary
 import dev.ranmt.data.TelemetryPoint
+import dev.ranmt.data.TelemetryAggregate
 import dev.ranmt.data.TransportStats
 import dev.ranmt.rust.RustClient
 import dev.ranmt.rust.RustClientHandle
@@ -126,6 +127,11 @@ class MeasurementService : Service() {
         sessionId = active.sessionId
         startedAt = active.startedAt
         metrics = MetricsAccumulator()
+        repository.aggregateTelemetry(active.sessionId)?.let { agg ->
+            metrics.applyAggregate(agg)
+        }
+        metrics.applyTransport(active.bytesSent, active.bytesReceived)
+        metrics.connectionDrops = active.connectionDrops + 1
         repository.startSession(active.sessionId, active.startedAt, active.config)
         RunningSessionState.start(active.sessionId, resumed = true)
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -141,24 +147,12 @@ class MeasurementService : Service() {
         stopRustClient()
         elapsedJob?.cancel()
 
+        sessionPrefs.saveTransport(metrics.bytesSent, metrics.bytesReceived)
+        sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
+
         val endTime = System.currentTimeMillis()
-        val summary = SessionSummary(
-            id = id,
-            startedAt = startedAt,
-            durationSec = ((endTime - startedAt) / 1000).toInt().coerceAtLeast(0),
-            averageJitterMs = metrics.avgJitter(),
-            lossPct = metrics.avgLoss(),
-            primaryRat = metrics.primaryRat ?: "Unknown"
-        )
-        val metricsSnapshot = SessionMetrics(
-            maxRsrp = metrics.maxRsrp,
-            minRsrp = metrics.minRsrp,
-            avgRsrp = metrics.avgRsrp(),
-            connectionDrops = metrics.connectionDrops,
-            bytesSent = metrics.bytesSent,
-            bytesReceived = metrics.bytesReceived,
-            peakJitterMs = metrics.peakJitter
-        )
+        val summary = metrics.toSummary(id, startedAt, endTime)
+        val metricsSnapshot = metrics.toMetrics()
         repository.finalizeSession(summary, metricsSnapshot)
         RunningSessionState.stop()
         sessionPrefs.clearActive()
@@ -275,6 +269,8 @@ class MeasurementService : Service() {
                 if (snapshot != null) {
                     lastTransportStats = snapshot.transport
                     snapshot.transport?.let { metrics.updateTransport(it) }
+                    sessionPrefs.saveTransport(metrics.bytesSent, metrics.bytesReceived)
+                    sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
                     RunningSessionState.updateTransport(snapshot.transport)
                     RunningSessionState.updateConnection(mapConnectionState(snapshot.state))
                 }
@@ -438,6 +434,15 @@ class MeasurementService : Service() {
 
     private fun buildNotification(): Notification {
         val channelId = ensureChannel()
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, dev.ranmt.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_OPEN_RUNNING, true)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val stopIntent = PendingIntent.getService(
             this,
             0,
@@ -449,6 +454,7 @@ class MeasurementService : Service() {
             .setContentText("Session running in the foreground")
             .setSmallIcon(R.mipmap.ic_launcher)
             .addAction(0, "Stop", stopIntent)
+            .setContentIntent(contentIntent)
             .setOngoing(true)
             .build()
     }
@@ -476,6 +482,8 @@ class MeasurementService : Service() {
         var totalJitter: Double = 0.0
         var totalLoss: Double = 0.0
         var primaryRat: String? = null
+        private var baseBytesSent: Long = 0
+        private var baseBytesReceived: Long = 0
         var bytesSent: Long = 0
         var bytesReceived: Long = 0
 
@@ -491,16 +499,60 @@ class MeasurementService : Service() {
         }
 
         fun updateTransport(stats: TransportStats) {
-            stats.txBytes?.let { bytesSent = it }
-            stats.rxBytes?.let { bytesReceived = it }
+            stats.txBytes?.let { bytesSent = baseBytesSent + it }
+            stats.rxBytes?.let { bytesReceived = baseBytesReceived + it }
             stats.jitterMs?.let { jitter ->
                 if (jitter > peakJitter) peakJitter = jitter
             }
         }
 
+        fun applyTransport(bytesSent: Long, bytesReceived: Long) {
+            baseBytesSent = bytesSent
+            baseBytesReceived = bytesReceived
+            this.bytesSent = bytesSent
+            this.bytesReceived = bytesReceived
+        }
+
         fun avgRsrp(): Int = if (count == 0) 0 else (sumRsrp / count).toInt()
         fun avgJitter(): Double = if (count == 0) 0.0 else totalJitter / count
         fun avgLoss(): Double = if (count == 0) 0.0 else totalLoss / count
+
+        fun applyAggregate(agg: TelemetryAggregate) {
+            count = agg.count
+            maxRsrp = agg.maxRsrp
+            minRsrp = agg.minRsrp
+            sumRsrp = agg.sumRsrp
+            totalJitter = agg.totalJitter
+            totalLoss = agg.totalLoss
+            peakJitter = agg.peakJitter
+            primaryRat = agg.primaryRat
+        }
+
+        fun toSummary(id: String, startedAt: Long, endTime: Long): SessionSummary {
+            val durationSec = ((endTime - startedAt) / 1000).toInt().coerceAtLeast(0)
+            return SessionSummary(
+                id = id,
+                startedAt = startedAt,
+                durationSec = durationSec,
+                averageJitterMs = avgJitter(),
+                lossPct = avgLoss(),
+                primaryRat = primaryRat ?: "Unknown"
+            )
+        }
+
+        fun toMetrics(): SessionMetrics {
+            val safeMax = if (count == 0) 0 else maxRsrp
+            val safeMin = if (count == 0) 0 else minRsrp
+            return SessionMetrics(
+                maxRsrp = safeMax,
+                minRsrp = safeMin,
+                avgRsrp = avgRsrp(),
+                connectionDrops = connectionDrops,
+                bytesSent = bytesSent,
+                bytesReceived = bytesReceived,
+                peakJitterMs = peakJitter
+            )
+        }
     }
 
     private data class RadioSnapshot(
@@ -524,6 +576,7 @@ class MeasurementService : Service() {
         const val EXTRA_DIRECTION = "extra_direction"
         const val EXTRA_BITRATE = "extra_bitrate"
         const val EXTRA_INSECURE = "extra_insecure"
+        const val EXTRA_OPEN_RUNNING = "extra_open_running"
 
         fun startIntent(context: Context, config: MeasurementConfig): Intent {
             return Intent(context, MeasurementService::class.java).apply {

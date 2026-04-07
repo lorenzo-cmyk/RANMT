@@ -29,7 +29,7 @@ import dev.ranmt.ui.screens.shareFile
 import dev.ranmt.ui.theme.RANMTTheme
 
 @Composable
-fun RANMTApp() {
+fun RANMTApp(openRunning: Boolean = false) {
     val navController = rememberNavController()
     val viewModel: MainViewModel = viewModel()
     val bottomBarRoutes = setOf(AppDestination.History.route, AppDestination.NewMeasurement.route)
@@ -38,7 +38,7 @@ fun RANMTApp() {
     val context = LocalContext.current
     val runningState by viewModel.runningState.collectAsState()
 
-    LaunchedEffect(runningState.sessionId, viewModel.hasActiveSession) {
+    LaunchedEffect(runningState.sessionId, viewModel.hasActiveSession, openRunning) {
         if (viewModel.suppressAutoNavigate && runningState.sessionId == null && !viewModel.hasActiveSession) {
             viewModel.clearSuppressAutoNavigate()
         }
@@ -49,6 +49,23 @@ fun RANMTApp() {
                     popUpTo(AppDestination.History.route)
                 }
             }
+        }
+        if (openRunning && currentRoute != AppDestination.Running.route) {
+            navController.navigate(AppDestination.Running.route) {
+                launchSingleTop = true
+                popUpTo(AppDestination.History.route)
+            }
+        }
+        if (runningState.sessionId == null && !viewModel.hasActiveSession) {
+            viewModel.refreshActiveSession()
+            viewModel.refreshSessions()
+        }
+    }
+
+    LaunchedEffect(currentRoute) {
+        if (currentRoute == AppDestination.History.route) {
+            viewModel.refreshActiveSession()
+            viewModel.refreshSessions()
         }
     }
 
@@ -81,9 +98,17 @@ fun RANMTApp() {
                     composable(AppDestination.History.route) {
                         HistoryScreen(
                             sessions = viewModel.sessions,
+                            activeSessionId = viewModel.activeSessionId,
                             onOpen = { id ->
-                                viewModel.loadDetail(id)
-                                navController.navigate("details/$id")
+                                if (id == viewModel.activeSessionId) {
+                                    navController.navigate(AppDestination.Running.route) {
+                                        launchSingleTop = true
+                                        popUpTo(AppDestination.History.route)
+                                    }
+                                } else {
+                                    viewModel.loadDetail(id)
+                                    navController.navigate("details/$id")
+                                }
                             },
                             onDelete = { id -> viewModel.deleteSession(id) },
                             onOpenSettings = { navController.navigate(AppDestination.Settings.route) }
@@ -93,6 +118,7 @@ fun RANMTApp() {
                         NewMeasurementScreen(
                             config = viewModel.config,
                             onConfigChange = viewModel::updateConfig,
+                            allowStart = !viewModel.hasActiveSession,
                             onStart = {
                                 viewModel.startMeasurement()
                                 navController.navigate(AppDestination.Running.route)

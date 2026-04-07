@@ -1,5 +1,6 @@
 package dev.ranmt
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,7 +12,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            RANMTApp()
+            RANMTApp(openRunning = intent.getBooleanExtra(
+                dev.ranmt.service.MeasurementService.EXTRA_OPEN_RUNNING,
+                false
+            ))
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 }

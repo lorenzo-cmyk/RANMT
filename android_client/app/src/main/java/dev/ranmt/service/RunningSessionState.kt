@@ -26,7 +26,7 @@ object RunningSessionState {
     fun start(sessionId: String, resumed: Boolean) {
         _state.value = RunningUiState(
             sessionId = sessionId,
-            connectionState = ConnectionState.Connected,
+            connectionState = ConnectionState.Reconnecting,
             resumed = resumed,
             locationPermissionMissing = false
         )

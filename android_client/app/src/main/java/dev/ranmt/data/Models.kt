@@ -35,6 +35,17 @@ data class TelemetryPoint(
     val lossPct: Double
 )
 
+data class TelemetryAggregate(
+    val count: Int,
+    val maxRsrp: Int,
+    val minRsrp: Int,
+    val sumRsrp: Long,
+    val totalJitter: Double,
+    val totalLoss: Double,
+    val peakJitter: Double,
+    val primaryRat: String?
+)
+
 data class SessionDetail(
     val summary: SessionSummary,
     val metrics: SessionMetrics,
