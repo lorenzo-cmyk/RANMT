@@ -6,7 +6,6 @@ import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +17,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Power
 import androidx.compose.material3.Card
@@ -29,7 +31,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,92 +60,103 @@ fun RunningScreen(
         }
     }
 
-    Column(modifier = Modifier.padding(20.dp)) {
+    Column(
+        modifier = Modifier
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
         Text(
             text = "Live Dashboard",
             style = MaterialTheme.typography.displayMedium,
             color = MaterialTheme.colorScheme.onBackground
         )
-        if (runningState.resumed) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Session resumed after restart.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { RunningSessionState.clearResumed() }) {
-                        Text("Dismiss")
-                    }
-                }
-            }
-        }
-        if (runningState.locationPermissionMissing) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Location permission missing. Telemetry paused.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = {
-                        val intent = Intent(
-                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.parse("package:${context.packageName}")
-                        )
-                        context.startActivity(intent)
-                    }) {
-                        Text("Open App Settings")
-                    }
-                }
-            }
-        }
+        val point = runningState.lastPoint
+        val networkType = point?.networkType ?: "Unknown"
+        val cellId = point?.cellId?.ifBlank { "--" } ?: "--"
+        val cellInfoMissing = cellId == "--" || networkType == "Unknown"
         Text(
             text = "${config.serverIp}:${config.serverPort} | ${config.direction} | ${config.bitrateBps} bps",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
         )
-        runningState.lastPoint?.let { point ->
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "${point.networkType} | RSRP ${point.rsrp} dBm | SINR ${point.sinr} dB | ${String.format("%.1f", point.speedMps)} m/s",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-            )
-            if (point.cellId.isBlank() || point.networkType == "Unknown") {
-                Spacer(modifier = Modifier.height(8.dp))
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "Cell info unavailable. Some devices restrict radio metrics.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(14.dp))
+        val rsrp = point?.rsrp?.toString() ?: "--"
+        val rsrq = point?.rsrq?.toString() ?: "--"
+        val sinr = point?.sinr?.toString() ?: "--"
+        val pci = point?.pci?.toString() ?: "--"
+        val earfcn = point?.earfcn?.toString() ?: "--"
+        val speed = point?.let { String.format("%.1f", it.speedMps) } ?: "--"
+        val lat = point?.let { String.format("%.5f", it.lat) } ?: "--"
+        val lon = point?.let { String.format("%.5f", it.lon) } ?: "--"
+        val timestamp = point?.timestamp?.toString() ?: "--"
+        val rtt = "--"
+        val loss = "--"
+        val cwnd = "--"
+        val bytesTx = "--"
+        val bytesRx = "--"
+        val jitter = "--"
 
+        Spacer(modifier = Modifier.height(12.dp))
         TimerCard(seconds = runningState.elapsedSec, state = runningState.connectionState)
+        if (runningState.resumed || runningState.locationPermissionMissing || cellInfoMissing) {
+            Spacer(modifier = Modifier.height(8.dp))
+            StatusTile(
+                entries = listOfNotNull(
+                    if (runningState.resumed) "Session" to "Resumed ⚠" else null,
+                    if (runningState.locationPermissionMissing) "Location" to "Permission missing" else null,
+                    if (cellInfoMissing) "Cell Info" to "Unavailable" else null
+                ),
+                showDismiss = runningState.resumed,
+                showSettings = runningState.locationPermissionMissing,
+                onDismiss = { RunningSessionState.clearResumed() },
+                onOpenSettings = {
+                    val intent = Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                    context.startActivity(intent)
+                }
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
-        SparklineRow(
-            rsrp = runningState.rsrpHistory,
-            sinr = runningState.sinrHistory
+
+        InfoTile(
+            title = "Radio",
+            subtitle = "RAN and signal quality",
+            entries = listOf(
+                "Network" to networkType,
+                "RSRP" to "$rsrp dBm",
+                "RSRQ" to "$rsrq dB",
+                "SINR" to "$sinr dB",
+                "Cell ID" to cellId,
+                "PCI" to pci,
+                "EARFCN" to earfcn
+            )
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        InfoTile(
+            title = "Transport",
+            subtitle = "QUIC stats (placeholder until Rust)",
+            entries = listOf(
+                "RTT" to "$rtt ms",
+                "Loss" to "$loss %",
+                "CWND" to cwnd,
+                "Jitter" to "$jitter ms",
+                "Bytes TX" to bytesTx,
+                "Bytes RX" to bytesRx
+            )
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        InfoTile(
+            title = "Location",
+            subtitle = "GPS telemetry",
+            entries = listOf(
+                "Speed" to "$speed m/s",
+                "Latitude" to lat,
+                "Longitude" to lon,
+                "Timestamp" to timestamp
+            )
+        )
+
         Spacer(modifier = Modifier.height(18.dp))
 
         Box(
@@ -230,45 +242,115 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
 }
 
 @Composable
-private fun SparklineRow(rsrp: List<Int>, sinr: List<Int>) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SparklineCard(label = "RSRP", values = rsrp, modifier = Modifier.weight(1f))
-        SparklineCard(label = "SINR", values = sinr, modifier = Modifier.weight(1f))
+private fun InfoTile(title: String, subtitle: String, entries: List<Pair<String, String>>) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+            val chunked = entries.chunked(2)
+            chunked.forEach { row ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { (label, value) ->
+                        MetricCard(label = label, value = value, modifier = Modifier.weight(1f))
+                    }
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun SparklineCard(label: String, values: List<Int>, modifier: Modifier = Modifier) {
-    val safeValues = remember(values) {
-        if (values.isEmpty()) List(2) { 0f }
-        else values.map { it.toFloat() }
-    }
-    val min = safeValues.minOrNull() ?: 0f
-    val max = safeValues.maxOrNull() ?: 1f
-    val range = (max - min).takeIf { it > 0f } ?: 1f
+private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(10.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Canvas(modifier = Modifier.fillMaxWidth().height(60.dp)) {
-                val step = size.width / (safeValues.size - 1)
-                for (i in 0 until safeValues.lastIndex) {
-                    val normalizedA = (safeValues[i] - min) / range
-                    val normalizedB = (safeValues[i + 1] - min) / range
-                    drawLine(
-                        color = Color(0xFF4A8CFF),
-                        start = androidx.compose.ui.geometry.Offset(i * step, size.height * (1 - normalizedA)),
-                        end = androidx.compose.ui.geometry.Offset((i + 1) * step, size.height * (1 - normalizedB)),
-                        strokeWidth = 4f
-                    )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusTile(
+    entries: List<Pair<String, String>>,
+    showDismiss: Boolean,
+    showSettings: Boolean,
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column {
+                Text(
+                    text = "Status",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Session health checks",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+            val chunked = entries.chunked(2)
+            chunked.forEach { row ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { (label, value) ->
+                        MetricCard(label = label, value = value, modifier = Modifier.weight(1f))
+                    }
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+            if (showDismiss || showSettings) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (showDismiss) {
+                        Button(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                            Text("Dismiss")
+                        }
+                    }
+                    if (showSettings) {
+                        Button(onClick = onOpenSettings, modifier = Modifier.weight(1f)) {
+                            Text("App Settings")
+                        }
+                    }
                 }
             }
         }

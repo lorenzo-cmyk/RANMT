@@ -49,6 +49,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var hasActiveSession by mutableStateOf(false)
         private set
 
+    var suppressAutoNavigate by mutableStateOf(false)
+        private set
+
     val runningState: StateFlow<RunningUiState> = RunningSessionState.state
 
     var settings by mutableStateOf(settingsStore.load())
@@ -100,10 +103,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopMeasurement() {
         isRunning = false
+        hasActiveSession = false
+        suppressAutoNavigate = true
         val intent = MeasurementService.stopIntent(getApplication())
         getApplication<Application>().startService(intent)
         refreshSessions()
-        refreshActiveSession()
     }
 
     fun updateConnectionState(state: ConnectionState) {
@@ -121,4 +125,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sessionFileSize(id: String) = repository.getSessionFileSize(id)
+
+    fun clearSuppressAutoNavigate() {
+        suppressAutoNavigate = false
+    }
 }
