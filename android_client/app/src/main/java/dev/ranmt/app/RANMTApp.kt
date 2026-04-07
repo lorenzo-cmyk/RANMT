@@ -111,7 +111,11 @@ fun RANMTApp(openRunning: Boolean = false) {
                                 }
                             },
                             onDelete = { id -> viewModel.deleteSession(id) },
-                            onOpenSettings = { navController.navigate(AppDestination.Settings.route) }
+                            onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
+                            onRefresh = {
+                                viewModel.refreshActiveSession()
+                                viewModel.refreshSessions()
+                            }
                         )
                     }
                     composable(AppDestination.NewMeasurement.route) {
