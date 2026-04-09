@@ -1,3 +1,5 @@
+use quiche::ConnectionId;
+use ranmt_shared::*;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -5,8 +7,6 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use quiche::ConnectionId;
-use ranmt_shared::*;
 
 #[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();
@@ -98,17 +98,13 @@ async fn update_state(
     snapshot.connection_state = new_state;
 }
 
-async fn update_stats(
-    state: &Option<Arc<Mutex<ClientSnapshot>>>,
-    stats: ServerStats,
-) {
+async fn update_stats(state: &Option<Arc<Mutex<ClientSnapshot>>>, stats: ServerStats) {
     let Some(shared) = state else {
         return;
     };
     let mut snapshot = shared.lock().await;
     snapshot.last_stats = Some(stats);
 }
-
 
 impl ClientConfig {
     pub fn sni_hostname(&self) -> &str {
@@ -162,10 +158,7 @@ fn build_client_connection(
 // Stream 0 helpers
 // ─────────────────────────────────────
 
-fn drain_stream(
-    conn: &mut quiche::Connection,
-    rx_buf: &mut Vec<u8>,
-) -> Vec<WireMessage> {
+fn drain_stream(conn: &mut quiche::Connection, rx_buf: &mut Vec<u8>) -> Vec<WireMessage> {
     let mut msgs = Vec::new();
     let mut tmp = [0u8; 8192];
     loop {
@@ -195,11 +188,7 @@ fn drain_stream(
     msgs
 }
 
-async fn flush_quic(
-    conn: &mut quiche::Connection,
-    socket: &UdpSocket,
-    peer: SocketAddr,
-) {
+async fn flush_quic(conn: &mut quiche::Connection, socket: &UdpSocket, peer: SocketAddr) {
     let mut buf = [0u8; MAX_QUIC_PACKET];
     loop {
         let (write_len, _send_info) = match conn.send(&mut buf) {
@@ -228,15 +217,15 @@ fn display_stats(stats: &ServerStats) {
     );
 }
 
-fn display_loss(
-    seq_num: u64, lost: u64, jitter: f64,
-    loss_rate: &f64, jitter_ewma: f64,
-) {
+fn display_loss(seq_num: u64, lost: u64, jitter: f64, loss_rate: &f64, jitter_ewma: f64) {
     if lost > 0 || jitter > 1.0 {
         tracing::info!(
             "DL seq={} | lost={} | jitter={:.1}ms | rate={:.2}% | ewma={:.1}ms",
-            seq_num, lost, jitter,
-            loss_rate * 100.0, jitter_ewma,
+            seq_num,
+            lost,
+            jitter,
+            loss_rate * 100.0,
+            jitter_ewma,
         );
     }
 }
@@ -273,10 +262,7 @@ fn push_backlog(backlog: &mut VecDeque<String>, msg: String) {
 }
 
 /// Non-blocking backlog drain — sends as much as QUIC allows per call.
-fn drain_backlog_quic(
-    conn: &mut quiche::Connection,
-    backlog: &mut VecDeque<String>,
-) {
+fn drain_backlog_quic(conn: &mut quiche::Connection, backlog: &mut VecDeque<String>) {
     while let Some(msg) = backlog.front() {
         if try_send_line(conn, msg, false) {
             backlog.pop_front();
@@ -353,12 +339,8 @@ pub async fn run_client_with_state(
         if config.insecure {
             quic_cfg.verify_peer(false);
         }
-        let mut conn = build_client_connection(
-            &mut quic_cfg,
-            config.sni_hostname(),
-            local_addr,
-            peer_addr,
-        )?;
+        let mut conn =
+            build_client_connection(&mut quic_cfg, config.sni_hostname(), local_addr, peer_addr)?;
 
         // Flush initial handshake packets immediately
         flush_quic(&mut conn, &socket, peer_addr).await;
@@ -370,28 +352,19 @@ pub async fn run_client_with_state(
 
         let mut mock_gen = match mock_gen.take() {
             Some(g) => g,
-            None => MockTelemetry::with_seed_seq(
-                test_start,
-                telemetry_seq,
-                config.seed,
-            ),
+            None => MockTelemetry::with_seed_seq(test_start, telemetry_seq, config.seed),
         };
 
         // Telemetry timer (1 Hz)
         let mut telemetry_interval =
             tokio::time::interval(Duration::from_millis(TELEMETRY_INTERVAL_MS));
-        telemetry_interval.set_missed_tick_behavior(
-            tokio::time::MissedTickBehavior::Delay,
-        );
-        let mut traffic_interval =
-            tokio::time::interval(if config.direction == Direction::Ul {
-                TrafficPacer::new(config.bitrate_bps).interval()
-            } else {
-                Duration::from_secs(1)
-            });
-        traffic_interval.set_missed_tick_behavior(
-            tokio::time::MissedTickBehavior::Delay,
-        );
+        telemetry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut traffic_interval = tokio::time::interval(if config.direction == Direction::Ul {
+            TrafficPacer::new(config.bitrate_bps).interval()
+        } else {
+            Duration::from_secs(1)
+        });
+        traffic_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         let mut pacer = TrafficPacer::with_seq(config.bitrate_bps, datagram_seq);
 
@@ -515,9 +488,7 @@ pub async fn run_client_with_state(
             let msgs = drain_stream(&mut conn, &mut rx_buf);
             for msg in msgs {
                 match msg {
-                    WireMessage::HandshakeAck(a)
-                        if a.status == HandshakeStatus::Ok =>
-                    {
+                    WireMessage::HandshakeAck(a) if a.status == HandshakeStatus::Ok => {
                         if !handshake_done {
                             handshake_done = true;
                             update_state(&state, ClientConnectionState::Connected).await;
@@ -548,30 +519,27 @@ pub async fn run_client_with_state(
                     match conn.dgram_recv(&mut dgram_buf) {
                         Ok(n) if n > 0 => {
                             if n != MAX_DGRAM_SIZE {
-                                tracing::warn!(
-                                    size = n,
-                                    "DL datagram size mismatch, skipping"
-                                );
+                                tracing::warn!(size = n, "DL datagram size mismatch, skipping");
                                 continue;
                             }
-                            if let Some((seq, send_ts)) =
-                                decode_traffic_payload(&dgram_buf[..n])
-                            {
+                            if let Some((seq, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
                                 let arrival = current_epoch_ms();
-                                let (lost, jitter) =
-                                    tracker.on_datagram(seq, send_ts, arrival);
+                                let (lost, jitter) = tracker.on_datagram(seq, send_ts, arrival);
                                 if let Some(shared) = &state {
                                     let mut snapshot = shared.lock().await;
                                     snapshot.last_loss = Some(tracker.loss_rate());
                                     snapshot.last_jitter_ms = Some(jitter);
                                     snapshot.jitter_ewma_ms = Some(tracker.jitter_ewma());
-                                    snapshot.loss_jitter_source = Some(
-                                        LossJitterSource::ReceivePath,
-                                    );
+                                    snapshot.loss_jitter_source =
+                                        Some(LossJitterSource::ReceivePath);
                                 }
-                                display_loss(seq, lost, jitter,
+                                display_loss(
+                                    seq,
+                                    lost,
+                                    jitter,
                                     &tracker.loss_rate(),
-                                    tracker.jitter_ewma());
+                                    tracker.jitter_ewma(),
+                                );
                             }
                         }
                         Ok(_) | Err(quiche::Error::Done) => break,
@@ -592,6 +560,7 @@ pub async fn run_client_with_state(
                     client_version: "0.1.0".into(),
                 });
                 if let Some(json) = serialize_message(&hs) {
+                    #[allow(clippy::collapsible_if)]
                     if try_send_line(&mut conn, &json, false) {
                         handshake_sent = true;
                     }
@@ -604,14 +573,10 @@ pub async fn run_client_with_state(
             }
 
             // Test duration check
-            if config.duration > 0
-                && test_start.elapsed() >= Duration::from_secs(config.duration)
-            {
-                if let Some(msg) = serialize_message(
-                    &WireMessage::Goodbye(Goodbye {
-                        reason: GoodbyeReason::TestComplete,
-                    })
-                ) {
+            if config.duration > 0 && test_start.elapsed() >= Duration::from_secs(config.duration) {
+                if let Some(msg) = serialize_message(&WireMessage::Goodbye(Goodbye {
+                    reason: GoodbyeReason::TestComplete,
+                })) {
                     let _ = try_send_line(&mut conn, &msg, true);
                 }
                 flush_quic(&mut conn, &socket, peer_addr).await;
@@ -641,8 +606,8 @@ pub async fn run_client_with_state(
 
         tracing::info!("Disconnected, reconnecting in 2s...");
 
-        let reconnect_deadline = tokio::time::Instant::now()
-            + Duration::from_millis(RECONNECT_DELAY_MS);
+        let reconnect_deadline =
+            tokio::time::Instant::now() + Duration::from_millis(RECONNECT_DELAY_MS);
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {

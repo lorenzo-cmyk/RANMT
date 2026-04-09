@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use std::net::ToSocketAddrs;
+use std::f64::consts::TAU;
 use std::fs::File;
 use std::io::Write;
+use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::time::Instant;
-use std::f64::consts::TAU;
+use uuid::Uuid;
 
 // ─────────────────────────────────────────────
 // Wire Protocol Constants
@@ -191,7 +191,10 @@ pub fn decode_traffic_payload(data: &[u8]) -> Option<(u64, u64)> {
 }
 
 /// Resolve a host string (FQDN or literal IPv4) to a single IPv4 address.
-pub fn resolve_ipv4(host: &str, port: u16) -> Result<std::net::SocketAddr, Box<dyn std::error::Error>> {
+pub fn resolve_ipv4(
+    host: &str,
+    port: u16,
+) -> Result<std::net::SocketAddr, Box<dyn std::error::Error>> {
     let addrs = (host, port).to_socket_addrs()?;
     for addr in addrs {
         if addr.is_ipv4() {
@@ -201,7 +204,8 @@ pub fn resolve_ipv4(host: &str, port: u16) -> Result<std::net::SocketAddr, Box<d
     Err(format!(
         "host '{}' has no IPv4 address (only AAAA records found)",
         host
-    ).into())
+    )
+    .into())
 }
 
 /// Convert a target bitrate (bps) into a duration for pacing.
@@ -249,8 +253,7 @@ impl TrafficPacer {
     }
 
     pub fn interval(&self) -> std::time::Duration {
-        let datagrams_per_sec =
-            (self.bitrate_bps as f64) / (self.bits_per_dgram as f64);
+        let datagrams_per_sec = (self.bitrate_bps as f64) / (self.bits_per_dgram as f64);
         let interval_ns = if datagrams_per_sec > 0.0 {
             (1_000_000_000.0 / datagrams_per_sec) as u64
         } else {
@@ -332,7 +335,9 @@ impl LossJitterTracker {
 
     pub fn loss_rate(&self) -> f64 {
         let total = self.total_lost + self.total_received;
-        if total == 0 { return 0.0; }
+        if total == 0 {
+            return 0.0;
+        }
         self.total_lost as f64 / total as f64
     }
 
@@ -385,9 +390,7 @@ impl SessionState {
     }
 
     pub fn write_telemetry(&mut self, tel: &ClientTelemetry) {
-        let line = match serde_json::to_string(
-            &WireMessage::ClientTelemetry(tel.clone())
-        ) {
+        let line = match serde_json::to_string(&WireMessage::ClientTelemetry(tel.clone())) {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(?e, "failed to serialize telemetry");
@@ -412,8 +415,9 @@ impl SessionState {
 
     pub fn is_dormant_expiring(&self) -> bool {
         match self.dormant_since {
-            Some(since) => since.elapsed()
-                >= std::time::Duration::from_secs(DORMANT_TIMEOUT_HOURS * 3600),
+            Some(since) => {
+                since.elapsed() >= std::time::Duration::from_secs(DORMANT_TIMEOUT_HOURS * 3600)
+            }
             None => false,
         }
     }
@@ -453,9 +457,7 @@ pub struct MockTelemetry {
 
 impl MockTelemetry {
     fn phase_offset_from_seed(seed: u64) -> f64 {
-        let scrambled = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        let scrambled = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (scrambled as f64 / u64::MAX as f64) * TAU
     }
 
@@ -508,8 +510,16 @@ impl MockTelemetry {
         ClientTelemetry {
             seq_num: seq,
             timestamp_ms: current_epoch_ms(),
-            lat, lon, speed, network_type,
-            cell_id, pci, earfcn, rsrp, rsrq, sinr,
+            lat,
+            lon,
+            speed,
+            network_type,
+            cell_id,
+            pci,
+            earfcn,
+            rsrp,
+            rsrq,
+            sinr,
         }
     }
 }

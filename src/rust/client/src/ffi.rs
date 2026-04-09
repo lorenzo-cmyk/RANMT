@@ -6,11 +6,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ClientConfig,
-    ClientConnectionState,
-    LossJitterSource,
-    ClientSnapshot,
-    run_client_with_state,
+    ClientConfig, ClientConnectionState, ClientSnapshot, LossJitterSource, run_client_with_state,
 };
 
 #[derive(uniffi::Enum, Debug, Clone, Copy)]
@@ -134,6 +130,7 @@ struct HandleInner {
     cancel: CancellationToken,
     task: Mutex<Option<tokio::task::JoinHandle<Result<(), String>>>>,
     snapshot: Arc<Mutex<ClientSnapshot>>,
+    #[allow(dead_code)] // Keeping `runtime` alive ensures background workers function properly
     runtime: Arc<Runtime>,
 }
 
@@ -150,7 +147,7 @@ impl ClientHandle {
                 task: Mutex::new(Some(task)),
                 snapshot,
                 runtime,
-            })
+            }),
         }
     }
 }
@@ -158,15 +155,15 @@ impl ClientHandle {
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn start_client(config: FfiClientConfig) -> Result<ClientHandle, ClientError> {
     if config.server_addr.trim().is_empty() {
-        return Err(ClientError::InvalidConfig("server_addr is empty".to_string()));
+        return Err(ClientError::InvalidConfig(
+            "server_addr is empty".to_string(),
+        ));
     }
     if config.port == 0 {
         return Err(ClientError::InvalidConfig("port must be > 0".to_string()));
     }
 
-    let runtime = Arc::new(
-        Runtime::new().map_err(|err| ClientError::Runtime(err.to_string()))?
-    );
+    let runtime = Arc::new(Runtime::new().map_err(|err| ClientError::Runtime(err.to_string()))?);
     let cancel = CancellationToken::new();
     let cancel_task = cancel.clone();
     let config = ClientConfig::from(config);
@@ -216,7 +213,7 @@ pub async fn get_stats(handle: &ClientHandle) -> Result<FfiStatsSnapshot, Client
             cwnd: stats.quic_stats.cwnd,
             lost_packets: stats.quic_stats.lost_packets,
             send_rate_bps: stats.quic_stats.send_rate_bps,
-        }
+        },
     });
 
     Ok(FfiStatsSnapshot {

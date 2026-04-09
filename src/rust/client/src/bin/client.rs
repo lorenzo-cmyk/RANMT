@@ -1,5 +1,5 @@
 use clap::Parser;
-use ranmt_client::{run_client, ClientConfig};
+use ranmt_client::{ClientConfig, run_client};
 use ranmt_shared::Direction;
 
 /// RANMT Client — measure RAN performance during mobility events.
@@ -47,11 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
-        .with_env_filter(if cli.verbose {
-            "debug"
-        } else {
-            "info"
-        })
+        .with_env_filter(if cli.verbose { "debug" } else { "info" })
         .init();
 
     let direction = match cli.direction.to_lowercase().as_str() {

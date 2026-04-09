@@ -1,13 +1,13 @@
 use clap::Parser;
+use quiche::ConnectionId;
 use ranmt_shared::*;
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use rcgen::{generate_simple_self_signed, CertifiedKey};
-use quiche::ConnectionId;
 
 /// RANMT Server — measures RAN performance during mobility events.
 #[derive(Parser)]
@@ -115,9 +115,7 @@ fn load_or_generate_cert(
                 Some(key_path.to_string_lossy().to_string()),
             ))
         }
-        _ => Err(
-            "both --cert and --key must be provided, or neither".into(),
-        ),
+        _ => Err("both --cert and --key must be provided, or neither".into()),
     }
 }
 
@@ -144,11 +142,7 @@ fn validate_handshake(h: &Handshake) -> Option<String> {
     None
 }
 
-fn send_handshake_ack(
-    conn: &mut quiche::Connection,
-    status: HandshakeStatus,
-    message: &str,
-) {
+fn send_handshake_ack(conn: &mut quiche::Connection, status: HandshakeStatus, message: &str) {
     tracing::debug!(?status, %message, "sending handshake ack");
     let ack = WireMessage::HandshakeAck(HandshakeAck {
         status,
@@ -184,10 +178,7 @@ fn dcid_key_from_packet(packet: &mut [u8]) -> Option<[u8; 16]> {
     Some(dcid)
 }
 
-fn remove_binding_for_scid(
-    session_bindings: &mut HashMap<uuid::Uuid, [u8; 16]>,
-    scid: [u8; 16],
-) {
+fn remove_binding_for_scid(session_bindings: &mut HashMap<uuid::Uuid, [u8; 16]>, scid: [u8; 16]) {
     session_bindings.retain(|_, bound_scid| *bound_scid != scid);
 }
 
@@ -195,7 +186,13 @@ fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
     let s = conn.stats();
     let path = conn.path_stats().next();
     let (rtt_ms, cwnd, send_rate_bps) = path
-        .map(|ps| (ps.rtt.as_secs_f64() * 1000.0, ps.cwnd as u64, ps.delivery_rate))
+        .map(|ps| {
+            (
+                ps.rtt.as_secs_f64() * 1000.0,
+                ps.cwnd as u64,
+                ps.delivery_rate,
+            )
+        })
         .unwrap_or((0.0, 0, 0));
     QuicStats {
         rtt_ms,
@@ -233,9 +230,8 @@ fn log_measurement_state(
         let conn_established = conn_entry
             .map(|entry| entry.conn.is_established())
             .unwrap_or(false);
-        let last_rx_age_ms = conn_entry.map(|entry| {
-            now.saturating_duration_since(entry.last_rx_at).as_millis() as u64
-        });
+        let last_rx_age_ms = conn_entry
+            .map(|entry| now.saturating_duration_since(entry.last_rx_at).as_millis() as u64);
         let last_stream_age_ms = conn_entry
             .and_then(|entry| entry.last_stream_at)
             .map(|ts| now.saturating_duration_since(ts).as_millis() as u64);
@@ -331,25 +327,21 @@ fn process_stream_messages(
                     );
                     // For session reconnects, skip validation (already accepted)
                     if sessions.get(&h.session_id).is_none()
-                        && let Some(err_msg) = validate_handshake(&h) {
-                            tracing::warn!(
-                                session_id = ?h.session_id,
-                                %err_msg,
-                                "handshake rejected"
-                            );
-                            send_handshake_ack(
-                                &mut entry.conn,
-                                HandshakeStatus::Error,
-                                &err_msg,
-                            );
-                            close_stream_0(&mut entry.conn);
-                            // Close the QUIC connection so the client can reconnect.
-                            let _ = entry.conn.close(true, 0x00, b"handshake error");
-                            continue;
-                        }
+                        && let Some(err_msg) = validate_handshake(&h)
+                    {
+                        tracing::warn!(
+                            session_id = ?h.session_id,
+                            %err_msg,
+                            "handshake rejected"
+                        );
+                        send_handshake_ack(&mut entry.conn, HandshakeStatus::Error, &err_msg);
+                        close_stream_0(&mut entry.conn);
+                        // Close the QUIC connection so the client can reconnect.
+                        let _ = entry.conn.close(true, 0x00, b"handshake error");
+                        continue;
+                    }
 
-                    let path = output_dir
-                        .join(format!("session_{}.jsonl", h.session_id));
+                    let path = output_dir.join(format!("session_{}.jsonl", h.session_id));
 
                     if let Some(existing) = sessions.get_mut(&h.session_id) {
                         if existing.is_dormant() {
@@ -401,32 +393,24 @@ fn process_stream_messages(
                         sessions.insert(h.session_id, sess);
                     }
 
-                    send_handshake_ack(
-                        &mut entry.conn,
-                        HandshakeStatus::Ok,
-                        "",
-                    );
+                    send_handshake_ack(&mut entry.conn, HandshakeStatus::Ok, "");
 
                     // Initialize traffic pacer for DL, restoring persisted seq
                     if h.direction == Direction::Dl {
                         let interval = calc_traffic_interval(h.bitrate_bps);
                         let mut ivl = tokio::time::interval(interval);
-                        ivl.set_missed_tick_behavior(
-                            tokio::time::MissedTickBehavior::Delay,
-                        );
+                        ivl.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         // Restore datagram seq from session state (spec §8.2 rule 4)
                         if let Some(existing) = sessions.get(&h.session_id) {
-                            entry.server_traffic_state =
-                                Some(ServerTrafficState {
-                                    interval: ivl,
-                                    next_seq: existing.datagram_send_seq,
-                                });
+                            entry.server_traffic_state = Some(ServerTrafficState {
+                                interval: ivl,
+                                next_seq: existing.datagram_send_seq,
+                            });
                         } else {
-                            entry.server_traffic_state =
-                                Some(ServerTrafficState {
-                                    interval: ivl,
-                                    next_seq: 0,
-                                });
+                            entry.server_traffic_state = Some(ServerTrafficState {
+                                interval: ivl,
+                                next_seq: 0,
+                            });
                         }
                     }
 
@@ -443,10 +427,11 @@ fn process_stream_messages(
                 Ok(WireMessage::Goodbye(reason)) => {
                     tracing::info!("client said goodbye (reason={reason:?})");
                     if let Some(sid) = entry.session_id
-                        && let Some(sess) = sessions.get_mut(&sid) {
-                            sess.close_jsonl();
-                            sessions.remove(&sid);
-                        }
+                        && let Some(sess) = sessions.get_mut(&sid)
+                    {
+                        sess.close_jsonl();
+                        sessions.remove(&sid);
+                    }
                     entry.session_id = None;
                     entry.direction = None;
                     entry.bitrate = None;
@@ -456,10 +441,11 @@ fn process_stream_messages(
                 }
                 Ok(WireMessage::ClientTelemetry(tel)) => {
                     if let Some(sid) = entry.session_id
-                        && let Some(sess) = sessions.get_mut(&sid) {
-                            tracing::trace!(session_id = ?sid, timestamp = tel.timestamp_ms, "telemetry received");
-                            sess.write_telemetry(&tel);
-                        }
+                        && let Some(sess) = sessions.get_mut(&sid)
+                    {
+                        tracing::trace!(session_id = ?sid, timestamp = tel.timestamp_ms, "telemetry received");
+                        sess.write_telemetry(&tel);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(%e, "malformed JSON on stream 0");
@@ -470,10 +456,7 @@ fn process_stream_messages(
     }
 }
 
-fn process_datagrams(
-    entry: &mut ActiveConn,
-    session: &mut SessionState,
-) {
+fn process_datagrams(entry: &mut ActiveConn, session: &mut SessionState) {
     if entry.direction != Some(Direction::Ul) {
         return;
     }
@@ -485,15 +468,10 @@ fn process_datagrams(
                 tracing::trace!(bytes = n, "datagram received");
                 entry.last_dgram_at = Some(Instant::now());
                 if n != MAX_DGRAM_SIZE {
-                    tracing::warn!(
-                        size = n,
-                        "UL datagram size mismatch, skipping"
-                    );
+                    tracing::warn!(size = n, "UL datagram size mismatch, skipping");
                     continue;
                 }
-                if let Some((seq_num, send_ts)) =
-                    decode_traffic_payload(&dgram_buf[..n])
-                {
+                if let Some((seq_num, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
                     let arrival = current_epoch_ms();
                     let (lost, jitter) = session
                         .datagram_tracker
@@ -517,11 +495,7 @@ fn process_datagrams(
     }
 }
 
-async fn flush_conn(
-    conn: &mut quiche::Connection,
-    socket: &UdpSocket,
-    peer: SocketAddr,
-) {
+async fn flush_conn(conn: &mut quiche::Connection, socket: &UdpSocket, peer: SocketAddr) {
     let mut buf = [0u8; MAX_QUIC_PACKET];
     loop {
         match conn.send(&mut buf) {
@@ -540,10 +514,7 @@ async fn flush_conn(
 
 /// Non-blocking process of QUIC timeout + stats + traffic for a single
 /// connection.  Returns true if the connection should be kept alive.
-async fn process_connection_periodic(
-    entry: &mut ActiveConn,
-    socket: &UdpSocket,
-) -> bool {
+async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket) -> bool {
     if entry.conn.is_closed() {
         tracing::debug!("connection already closed");
         return false;
@@ -563,12 +534,9 @@ async fn process_connection_periodic(
 
     // Send server stats on interval
     if entry.session_id.is_some() {
-        let stats_fired = tokio::time::timeout(
-            Duration::ZERO,
-            entry.stats_interval.tick(),
-        )
-        .await
-        .is_ok();
+        let stats_fired = tokio::time::timeout(Duration::ZERO, entry.stats_interval.tick())
+            .await
+            .is_ok();
         if stats_fired {
             tracing::trace!("sending server stats");
             let stats = WireMessage::ServerStats(ServerStats {
@@ -592,26 +560,16 @@ async fn process_connection_periodic(
 
     // Traffic pacer (DL only)
     if let Some(sts) = entry.server_traffic_state.as_mut() {
-        let traffic_fired = tokio::time::timeout(
-            Duration::ZERO,
-            sts.interval.tick(),
-        )
-        .await
-        .is_ok();
+        let traffic_fired = tokio::time::timeout(Duration::ZERO, sts.interval.tick())
+            .await
+            .is_ok();
         if traffic_fired && entry.conn.is_established() {
             tracing::trace!(seq = sts.next_seq, "sending DL datagram");
             let mut payload = [0u8; MAX_DGRAM_SIZE];
-            encode_traffic_payload(
-                sts.next_seq,
-                current_epoch_ms(),
-                &mut payload,
-            );
+            encode_traffic_payload(sts.next_seq, current_epoch_ms(), &mut payload);
             match entry.conn.dgram_send(&payload) {
                 Ok(_) => {
-                    tracing::debug!(
-                        seq = sts.next_seq,
-                        "DL datagram sent"
-                    );
+                    tracing::debug!(seq = sts.next_seq, "DL datagram sent");
                     sts.next_seq += 1;
                 }
                 Err(quiche::Error::Done) => {}
@@ -660,11 +618,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Bind UDP socket
-    let socket = UdpSocket::bind(format!(
-        "{}:{}",
-        cli.bind_addr, cli.port
-    ))
-    .await?;
+    let socket = UdpSocket::bind(format!("{}:{}", cli.bind_addr, cli.port)).await?;
     tracing::info!(local_addr = %socket.local_addr()?, "UDP socket bound");
 
     let output_dir = &cli.output_dir;
@@ -679,16 +633,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // even when no UDP packets arrive.  This keeps the handshake alive
     // between client packets.
     let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
-    tick_interval.set_missed_tick_behavior(
-        tokio::time::MissedTickBehavior::Delay,
-    );
+    tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    let mut measurement_state_interval = tokio::time::interval(
-        Duration::from_millis(MEASUREMENT_STATE_LOG_MS),
-    );
-    measurement_state_interval.set_missed_tick_behavior(
-        tokio::time::MissedTickBehavior::Delay,
-    );
+    let mut measurement_state_interval =
+        tokio::time::interval(Duration::from_millis(MEASUREMENT_STATE_LOG_MS));
+    measurement_state_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
