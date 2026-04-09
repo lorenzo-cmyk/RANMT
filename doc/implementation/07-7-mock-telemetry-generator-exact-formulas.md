@@ -71,6 +71,3 @@ The test uses `Instant::now()` for `t_secs` (monotonic clock), NOT `SystemTime`.
 - Same seed → same telemetry values relative to test start.
 - `SystemTime` wall clock is only used for `timestamp_ms` (which must be real).
 - Note: `--seed` currently does not feed into a PRNG; all oscillations are deterministic `sin()` functions. The `--seed` parameter is reserved for future PRNG-based mock data.
-
----
-

@@ -66,6 +66,3 @@ pub enum GoodbyeReason {
     Error,
 }
 ```
-
----
-

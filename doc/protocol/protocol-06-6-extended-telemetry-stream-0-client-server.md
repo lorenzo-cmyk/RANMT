@@ -43,6 +43,3 @@ Client periodically pushes environmental telemetry to the server, on the same bi
 - Telemetry records are appended to a file named `session_<session_id>.jsonl` in the server's output directory.
 - Each line is the raw JSON of a single `ClientTelemetry` message.
 - File is opened in append mode. No truncation on reconnection.
-
----
-

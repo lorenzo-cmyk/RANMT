@@ -12,6 +12,3 @@ Every JSON message carries a `"type"` discriminator:
   ...fields...
 }
 ```
-
----
-

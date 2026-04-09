@@ -89,6 +89,3 @@ outer loop:
 - `bin/client.rs` is a thin wrapper: parses CLI args, sets up tracing, calls `lib::run_client()`.
 - This separation allows future compilation to `cdylib` for UniFFI, where `lib::run_client()` becomes a Kotlin-callable function.
 - `std::process::exit` is **never** called in `lib.rs`. Errors are returned or logged.
-
----
-

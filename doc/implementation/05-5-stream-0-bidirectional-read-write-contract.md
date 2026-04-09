@@ -117,6 +117,3 @@ for msg in drain_stream(&mut conn, &mut rx_buf) {
     }
 }
 ```
-
----
-

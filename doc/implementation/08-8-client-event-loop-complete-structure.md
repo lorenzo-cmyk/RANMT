@@ -242,6 +242,3 @@ The `select!` only has **two branches**: the QUIC timeout timer and the UDP sock
 
 - `tick().now_or_never()` polls a tokio interval without yielding — returns `Some(Instant)` if the tick has fired, `None` if not. This is how we multiplex multiple tickers in synchronous code.
 - All quiche calls (`stream_recv`, `stream_send`, `dgram_recv`, `dgram_send`, `on_timeout`) are synchronous — they return immediately.
-
----
-

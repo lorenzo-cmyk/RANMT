@@ -44,6 +44,3 @@ pub enum NetworkType {
     Unknown,
 }
 ```
-
----
-

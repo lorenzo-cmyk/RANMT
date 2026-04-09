@@ -42,6 +42,3 @@ Initiated by the client immediately after the QUIC connection is established.
 ```
 
 **Client behavior:** Client MUST NOT start traffic or telemetry until receiving `{"type":"handshake_ack","status":"ok"}`.
-
----
-

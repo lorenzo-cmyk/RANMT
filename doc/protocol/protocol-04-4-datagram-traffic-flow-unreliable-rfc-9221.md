@@ -62,6 +62,3 @@ Jitter is computed per-datagram arrival. The receiver maintains an exponentially
 ```jitter_ewma = 0.9 * jitter_ewma + 0.1 * |delta_arrival - delta_send|```
 
 Initial value: `jitter_ewma` of first computed pair.
-
----
-

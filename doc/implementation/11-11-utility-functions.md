@@ -158,6 +158,3 @@ fn extract_send_rate_bps(stats: &quiche::Stats) -> u64 {
 ```
 
 > **Note:** `conn.stats()` returns a `quiche::Stats` struct. The exact fields available depend on the quiche version. In 0.22, `rtt`, `cwnd`, `sent`, `received`, `lost` are reliably available. `send_rate` may require reading from quiche FFI.
-
----
-

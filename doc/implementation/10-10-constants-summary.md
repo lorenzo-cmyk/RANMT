@@ -16,6 +16,3 @@
 | `MAX_QUIC_PACKET` | `1500` | §6.1 |
 | `DEFAULT_PORT` | `4433` | §4.2 CLI |
 | `DORMANT_SESSION_TIMEOUT_H` | `24` | protocol §8.4 |
-
----
-

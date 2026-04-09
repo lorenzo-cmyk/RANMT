@@ -91,6 +91,3 @@
 - **Client-side `seq_num` for datagrams while offline:** The seq_num counter is **not** incremented during disconnection. It only increments on actual `dgram_send()` calls. This ensures the receiver can still use gaps in `seq_num` to identify lost packets vs. offline periods.
 
 - **Concurrent sessions on server:** The server supports multiple active sessions (different `session_id` values) simultaneously. Each session has its own QUIC connection, JSONL file, stats ticker, and traffic pacer.
-
----
-

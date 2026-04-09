@@ -45,6 +45,3 @@ fn make_quic_config() -> Result<Config, quiche::Error> {
 | `max_stream_data = 5 MiB (bidi)` | Telemetry backlog flush can be ~2 MiB (10 000 entries × ~200 bytes). 5 MiB avoids flow-control stalls. |
 | `max_data = 10 MiB` | Connection-level ceiling. At 8 kbps, 10 MiB ≈ 10 000 seconds of data. |
 | `max_send/recv_udp_payload = 1200` | Matches `MAX_DGRAM_SIZE`, avoids IP fragmentation. |
-
----
-

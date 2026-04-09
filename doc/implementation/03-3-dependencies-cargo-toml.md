@@ -100,6 +100,3 @@ pacman -S cmake pkgconf go gcc perl
 ```
 
 > **Note:** quiche bundles BoringSSL as a git submodule, so `git clone` of the quiche repo (or `cargo build` with quiche as dependency) handles it automatically. The feature flags `boringss-vendored` (default) build BoringSSL from source. Setting `QUICHE_BSSL_SRC_PATH` or `QUICHE_NO_PKG_CONFIG` can override source paths.
-
----
-

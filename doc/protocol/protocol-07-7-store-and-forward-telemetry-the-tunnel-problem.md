@@ -17,6 +17,3 @@ Upon successful handshake acknowledgment, the client:
 ### 7.3 No Telemetry Ack Needed
 
 The client does not wait for server acknowledgment of telemetry. Fire-and-forget. If the server receives a malformed message, it logs a warning and continues.
-
----
-

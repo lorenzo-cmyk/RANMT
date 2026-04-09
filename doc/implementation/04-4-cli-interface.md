@@ -72,6 +72,3 @@ ranmt-client rantest.example.com \
 # Reproducible mock data (same seed = same telemetry)
 ranmt-client 10.0.0.50 --direction dl --seed 12345
 ```
-
----
-

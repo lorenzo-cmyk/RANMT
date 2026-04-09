@@ -8,6 +8,3 @@ Each line in `session_<uuid>.jsonl` is one raw `ClientTelemetry` JSON message:
 ```
 
 > No header line. No blank lines between records. Pure newline-delimited JSON.
-
----
-

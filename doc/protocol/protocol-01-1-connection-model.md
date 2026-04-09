@@ -39,6 +39,3 @@ We use a single client-initiated bidirectional stream for all application data, 
 - Opening a second bidirectional stream (e.g., for stats) would use ID **4**. The client would need to accept it from the server side, which requires additional event handling in quiche for server-initiated stream creation.
 - Telemetry and stats flow in opposite directions but never compete: the client writes telemetry and reads stats; the server reads telemetry and writes stats. A single bidi stream handles this naturally.
 - The JSON `"type"` discriminator cleanly separates the three message types without any stream-level multiplexing overhead.
-
----
-

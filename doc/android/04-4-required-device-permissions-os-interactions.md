@@ -4,6 +4,3 @@ To achieve this behavior in Android 15, the app will request the following from 
 2.  **Notification Permission:** Android 13+ requires explicit permission to post the Foreground Service indicator (`POST_NOTIFICATIONS`).
 3.  **Radio/Telephony States:** To natively read network types (5G/LTE), Cell IDs, frequency bands (EARFCN), and signal strengths directly from the device's modem (`READ_PHONE_STATE` and `ACCESS_COARSE_LOCATION`/`ACCESS_FINE_LOCATION`).
 4.  **Disable Battery Optimization:** The app will optimally prompt the user to exempt it from Android's "App Standby Buckets" to ensure the network I/O loop is never throttled (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`).
-
----
-

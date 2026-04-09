@@ -35,6 +35,3 @@ pub fn decode_traffic_payload(data: &[u8]) -> Option<(u64, u64)> {
 ```
 
 > **`seq_num`** and **`send_ts`** are returned for loss/jitter calculation. Padding is discarded.
-
----
-

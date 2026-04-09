@@ -39,6 +39,3 @@ let msg: WireMessage = serde_json::from_str(&line).unwrap();
 let payload = format!("\"type\":\"handshake\",{}", serde_json::to_string(&h).unwrap());
 ```
 The enum approach is preferred — it's less error-prone.
-
----
-

@@ -68,6 +68,3 @@ Server (bin/server.rs)
 - A `HashMap<Uuid, SessionState>` maps session_id → session state (independent of QUIC connection).
 - The server's single event loop iterates over all active connections.
 - When a session reconnects: the new QUIC connection is created, the old one is torn down, and the SessionState is rebound to the new connection. The JSONL file handle is never closed during reconnect — it stays open for the 24h dormant window.
-
----
-

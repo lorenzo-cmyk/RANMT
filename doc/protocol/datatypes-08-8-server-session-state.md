@@ -92,6 +92,3 @@ impl SessionState {
 ```
 
 > `write_telemetry` uses `sync_all()` to force disk writes immediately. For production throughput, consider buffering with periodic sync (e.g., every 5 seconds).
-
----
-

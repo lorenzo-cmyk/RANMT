@@ -30,6 +30,3 @@
 
 In quiche >= 0.20, `conn.process()` handles timer processing internally.
 Use `conn.on_timeout()` when the external timer fires.
-
----
-

@@ -19,6 +19,3 @@ Server behavior:
 ### 9.2 Abrupt Shutdown
 
 If the client crashes or drops connection, the server relies on `idle_timeout` (30 s) to detect dead connections. The session JSONL file remains open with whatever data was received — this is the expected behavior.
-
----
-

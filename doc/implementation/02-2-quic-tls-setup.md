@@ -142,6 +142,3 @@ pub fn generate_dev_cert() -> (Vec<u8>, Vec<u8>) {
 - **Key algorithm:** ECDSA P-256 (required for TLS 1.3).
 - **SAN:** `DNS: ranmt-dev.local`.
 - **Client dev mode:** `conn.set_verify(&openssl::ssl::SslVerifyMode::NONE)`.
-
----
-

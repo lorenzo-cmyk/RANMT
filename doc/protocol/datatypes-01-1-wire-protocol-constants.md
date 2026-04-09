@@ -37,6 +37,3 @@ pub const DEFAULT_PORT: u16 = 4433;
 /// Default bitrate for DL tests
 pub const DEFAULT_BITRATE_BPS: u32 = 8000;
 ```
-
----
-

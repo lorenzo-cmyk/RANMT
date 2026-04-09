@@ -45,6 +45,3 @@ let socket = tokio::net::UdpSocket::bind(
     &format!("0.0.0.0:{port}")
 ).await?;
 ```
-
----
-

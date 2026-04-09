@@ -30,6 +30,3 @@ pub struct QuicStats {
 ```json
 {"type":"server_stats","timestamp_ms":1712448000000,"quic_stats":{"rtt_ms":45.2,"tx_bytes":123456,"rx_bytes":654321,"cwnd":12000,"lost_packets":3,"send_rate_bps":8050}}\n
 ```
-
----
-

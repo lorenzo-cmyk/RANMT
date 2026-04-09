@@ -9,6 +9,3 @@
 | Telemetry file write fails    | Log `ERROR`, continue (don't crash test)                       |
 | Connection drops mid-stream   | Break inner event loop, log `INFO`, reconnect                  |
 | QUIC timeout (`idle_timeout`) | Connection closes, server cleans up resources                  |
-
----
-

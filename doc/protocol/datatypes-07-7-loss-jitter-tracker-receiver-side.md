@@ -68,6 +68,3 @@ impl LossJitterTracker {
     }
 }
 ```
-
----
-

@@ -30,6 +30,3 @@ Server periodically pushes connection stats to the client **on the same bidirect
 | `send_rate_bps` | u64  | `conn.stats().stats().send_rate_mbps * 1_000_000` |
 
 > The client displays these stats in the CLI. It does **not** need to acknowledge or respond.
-
----
-

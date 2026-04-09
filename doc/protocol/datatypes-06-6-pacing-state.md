@@ -61,6 +61,3 @@ if traffic_interval.tick().now_or_never().is_some() {
 ```
 
 > **Design:** `TrafficPacer` was made synchronous because the client event loop already manages a tokio interval. Separating the timer (async, event-loop concern) from the payload generator (sync, UniFFI-safe) keeps the pacer testable and portable.
-
----
-

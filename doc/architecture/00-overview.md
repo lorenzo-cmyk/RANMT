@@ -1,2 +1,1 @@
 # RANMT Architecture Overview
-

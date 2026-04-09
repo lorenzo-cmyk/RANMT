@@ -467,6 +467,3 @@ if let Some(ref mut sts) = entry.server_traffic_state {
 ```
 
 > The sequence counter lives on the server-side `ServerTrafficState`, not in `TrafficPacer`. `TrafficPacer.next_seq` starts at 0 and increments each call but is **not** persisted across server restarts or reconnects if stored separately. For DL tests where the server is the sender, `ServerTrafficState.next_seq` is the authoritative counter.
-
----
-
