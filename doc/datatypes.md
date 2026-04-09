@@ -24,7 +24,7 @@ pub const TELEMETRY_BUFFER_CAP: usize = 10_000;
 pub const RECONNECT_DELAY_MS: u64 = 2000;
 
 /// Server idle timeout
-pub const IDLE_TIMEOUT_MS: u64 = 30_000;
+pub const IDLE_TIMEOUT_MS: u64 = 10_000;
 
 /// Telemetry interval
 pub const TELEMETRY_INTERVAL_MS: u64 = 1000;

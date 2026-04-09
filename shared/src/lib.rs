@@ -16,9 +16,8 @@ pub const MAX_DGRAM_SIZE: usize = 1200;
 pub const TRAFFIC_HEADER_SIZE: usize = 1 + 8 + 8;
 pub const TELEMETRY_BUFFER_CAP: usize = 10_000;
 pub const RECONNECT_DELAY_MS: u64 = 2000;
-/// Server idle timeout (30 seconds). quiche expects microseconds, so multiply
-/// by 1000 at the call site: `set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000)`.
-pub const IDLE_TIMEOUT_MS: u64 = 30_000;
+/// Server idle timeout (10 seconds). quiche expects milliseconds.
+pub const IDLE_TIMEOUT_MS: u64 = 10_000;
 pub const TELEMETRY_INTERVAL_MS: u64 = 1000;
 pub const STATS_INTERVAL_MS: u64 = 1000;
 pub const PAYLOAD_TYPE_TRAFFIC: u8 = 0x01;

@@ -129,7 +129,7 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     // fit after short-header + packet number + AEAD overhead.
     config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
-    config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000);
+    config.set_max_idle_timeout(IDLE_TIMEOUT_MS);
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -530,6 +530,8 @@ pub async fn run_client_with_state(
                             err = %a.message,
                             "server rejected handshake"
                         );
+                        let _ = conn.close(true, 0x00, b"handshake rejected");
+                        break 'inner;
                     }
                     WireMessage::ServerStats(s) => {
                         update_stats(&state, s.clone()).await;

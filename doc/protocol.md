@@ -16,7 +16,7 @@
 | Max datagram frame size    | **1200 bytes**         | Matches typical IPv4 MTU; our payloads ≤ 1200 |
 | CC algorithm               | BBR                    | Set via `set_cc_algorithm(BBR)`               |
 | Datagram support           | **enabled** (RFC 9221) | Required for unreliable traffic flow          |
-| idle_timeout               | **30 000 ms**          | Server-side; client reconnects faster         |
+| idle_timeout               | **10 000 ms**          | Server-side; client reconnects faster         |
 
 ### 1.2 TLS Configuration
 
@@ -325,7 +325,7 @@ The client does not wait for server acknowledgment of telemetry. Fire-and-forget
 4. **Seq_num continuity:** `seq_num` for datagrams **is never reset**. It continues incrementing from the last value, even across reconnections. The same applies to telemetry `seq_num`. This ensures that post-processing tools can detect gaps and calculate true data completeness across the entire session, regardless of how many disconnections occurred.
 
 5. **Server-side reconnect handling:** The server does **not** actively probe for dead connections. It relies on:
-   - QUIC `idle_timeout` (30 s) to detect when a client has silently dropped.
+  - QUIC `idle_timeout` (10 s) to detect when a client has silently dropped.
    - A new QUIC connection arriving with a `Handshake` containing a `session_id` that matches an existing session. When this happens, the server:
      1. Tears down the old (dead) connection and its associated resources (stats ticker, traffic pacer).
      2. Associates the **new** QUIC connection with the existing `SessionState`.
@@ -345,7 +345,7 @@ The client does not wait for server acknowledgment of telemetry. Fire-and-forget
   T+14s     Retry #1 (socket fails)   —
   T+16s     Retry #2 (socket fails)   —
   ...
-  T+35s     Old QUIC conn timed out   Server cleans up old conn,
+  T+15s     Old QUIC conn timed out   Server cleans up old conn,
              on server                  but SessionState kept alive
                                         (session is "dormant")
   T+40s     Tunnel exit. Retry N.     —
@@ -366,7 +366,7 @@ The client does not wait for server acknowledgment of telemetry. Fire-and-forget
 | Telemetry generation              | Continues at 1 Hz. Entries pushed to `VecDeque` buffer.                                                                                                                                                                                   |
 | Datagram seq_num                  | **Paused** — no traffic sent or received while disconnected.                                                                                                                                                                              |
 | Buffer overflow (>10 000 entries) | Oldest entries silently dropped. ~2h46m of telemetry at 1 Hz before loss.                                                                                                                                                                 |
-| Server old conn cleanup           | After 30s idle timeout, QUIC conn is closed. SessionState marked "dormant".                                                                                                                                                               |
+| Server old conn cleanup           | After 10s idle timeout, QUIC conn is closed. SessionState marked "dormant".                                                                                                                                                               |
 | Server dormant session lifetime   | **24 hours max**. If no reconnect within 24h, SessionState is evicted and JSONL closed.                                                                                                                                                   |
 | Post-reconnect jitter calculation | Jitter will show a **massive spike** for the first datagram after reconnect (large `delta_arrival`). This is expected and should be visible in analysis but not skew EWMA excessively — EWMA naturally dampens single outliers over time. |
 

@@ -68,7 +68,7 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     // fit after short-header + packet number + AEAD overhead.
     config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
-    config.set_max_idle_timeout(IDLE_TIMEOUT_MS * 1000);
+    config.set_max_idle_timeout(IDLE_TIMEOUT_MS);
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -343,6 +343,8 @@ fn process_stream_messages(
                                 &err_msg,
                             );
                             close_stream_0(&mut entry.conn);
+                            // Close the QUIC connection so the client can reconnect.
+                            let _ = entry.conn.close(true, 0x00, b"handshake error");
                             continue;
                         }
 
@@ -363,6 +365,7 @@ fn process_stream_messages(
                                     "server error: failed to reopen session file",
                                 );
                                 close_stream_0(&mut entry.conn);
+                                let _ = entry.conn.close(true, 0x00, b"session error");
                                 continue;
                             }
                             tracing::info!(
@@ -390,6 +393,7 @@ fn process_stream_messages(
                                     "server error: cannot open session file",
                                 );
                                 close_stream_0(&mut entry.conn);
+                                let _ = entry.conn.close(true, 0x00, b"session error");
                                 continue;
                             }
                         };
