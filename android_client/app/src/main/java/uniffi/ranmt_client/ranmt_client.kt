@@ -1592,12 +1592,6 @@ data class FfiStatsSnapshot (
     var `jitterEwmaMs`: kotlin.Double?
     , 
     var `lossJitterSource`: FfiLossJitterSource?
-    , 
-    var `lastLoopMs`: kotlin.ULong?
-    , 
-    var `lastTxMs`: kotlin.ULong?
-    , 
-    var `txPackets`: kotlin.ULong
     
 ){
     
@@ -1620,9 +1614,6 @@ public object FfiConverterTypeFfiStatsSnapshot: FfiConverterRustBuffer<FfiStatsS
             FfiConverterOptionalDouble.read(buf),
             FfiConverterOptionalDouble.read(buf),
             FfiConverterOptionalTypeFfiLossJitterSource.read(buf),
-            FfiConverterOptionalULong.read(buf),
-            FfiConverterOptionalULong.read(buf),
-            FfiConverterULong.read(buf),
         )
     }
 
@@ -1632,10 +1623,7 @@ public object FfiConverterTypeFfiStatsSnapshot: FfiConverterRustBuffer<FfiStatsS
             FfiConverterOptionalDouble.allocationSize(value.`lossRate`) +
             FfiConverterOptionalDouble.allocationSize(value.`jitterMs`) +
             FfiConverterOptionalDouble.allocationSize(value.`jitterEwmaMs`) +
-            FfiConverterOptionalTypeFfiLossJitterSource.allocationSize(value.`lossJitterSource`) +
-            FfiConverterOptionalULong.allocationSize(value.`lastLoopMs`) +
-            FfiConverterOptionalULong.allocationSize(value.`lastTxMs`) +
-            FfiConverterULong.allocationSize(value.`txPackets`)
+            FfiConverterOptionalTypeFfiLossJitterSource.allocationSize(value.`lossJitterSource`)
     )
 
     override fun write(value: FfiStatsSnapshot, buf: ByteBuffer) {
@@ -1645,9 +1633,6 @@ public object FfiConverterTypeFfiStatsSnapshot: FfiConverterRustBuffer<FfiStatsS
             FfiConverterOptionalDouble.write(value.`jitterMs`, buf)
             FfiConverterOptionalDouble.write(value.`jitterEwmaMs`, buf)
             FfiConverterOptionalTypeFfiLossJitterSource.write(value.`lossJitterSource`, buf)
-            FfiConverterOptionalULong.write(value.`lastLoopMs`, buf)
-            FfiConverterOptionalULong.write(value.`lastTxMs`, buf)
-            FfiConverterULong.write(value.`txPackets`, buf)
     }
 }
 
@@ -1837,38 +1822,6 @@ public object FfiConverterTypeFfiLossJitterSource: FfiConverterRustBuffer<FfiLos
 }
 
 
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
-    override fun read(buf: ByteBuffer): kotlin.ULong? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterULong.read(buf)
-    }
-
-    override fun allocationSize(value: kotlin.ULong?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterULong.allocationSize(value)
-        }
-    }
-
-    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterULong.write(value, buf)
-        }
-    }
-}
 
 
 
