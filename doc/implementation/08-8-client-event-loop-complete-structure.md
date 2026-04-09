@@ -43,12 +43,10 @@ pub async fn run_client(config: ClientConfig) -> Result<()> {
 
         // 2. Build QUIC connection
         let mut quic_cfg = make_quic_config()?;
-        let fp = config.cert_fingerprint.as_deref();
         let mut conn = build_client_connection(
             &mut quic_cfg,
             config.sni_hostname(),
             config.insecure,
-            fp,
         )?;
 
         // 3. Initialize state

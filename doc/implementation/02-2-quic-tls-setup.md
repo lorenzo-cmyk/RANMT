@@ -35,10 +35,6 @@ pub struct ClientConfig {
     #[arg(long)]
     pub insecure: bool,
 
-    /// SHA-256 fingerprint to pin (skips CA verification)
-    #[arg(long)]
-    pub cert_fingerprint: Option<String>,
-
     /// RNG seed for mock telemetry
     #[arg(long, default_value = "42")]
     pub seed: u64,
@@ -64,7 +60,6 @@ pub fn build_client_connection(
     quic_cfg: &mut Config,
     server_fqdn: &str,
     verify_insecure: bool,
-    cert_fingerprint: Option<&str>,  // SHA-256 hex, e.g. "A1:B2:..."
 ) -> Result<Connection, quiche::Error> {
     let mut scid = [0u8; 16];
     getrandom::getrandom(&mut scid).unwrap();
@@ -72,24 +67,6 @@ pub fn build_client_connection(
 
     if verify_insecure {
         conn.set_verify(SslVerifyMode::empty());
-    } else if let Some(fp) = cert_fingerprint {
-        // Pin to a specific certificate fingerprint
-        conn.set_verify_callback(
-            openssl::ssl::SslVerifyMode::PEER,
-            move |ok, ctx| -> bool {
-                if !ok { return false; }
-                let expected = fp.replace(":", "").to_lowercase();
-                let cert = ctx.current_cert().expect("peer cert missing");
-                let digest = cert
-                    .digest(openssl::hash::MessageDigest::sha256())
-                    .unwrap();
-                let hex = digest
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>();
-                hex == expected
-            },
-        );
     }
 
     Ok(conn)
@@ -98,7 +75,7 @@ pub fn build_client_connection(
 
 **Critical:** `quiche::connect()` requires `Some(server_fqdn)` for SNI. The server uses SNI to select the correct certificate.
 
-> **openssl dependency note:** `set_verify` takes `SslVerifyMode` from the `openssl` crate. quiche links against its own vendored OpenSSL, so `openssl 0.10` must match quiche's internal version. If version conflicts occur, use `quiche::ffi::SSL_VERIFY_NONE` (a raw `u32` constant) instead and cast it via `std::mem::transmute`. In practice, quiche's Cargo.toml pins a specific openssl version — just pin the same in your client's Cargo.toml.
+> **openssl dependency note:** `set_verify` takes `SslVerifyMode` from the `openssl` crate. quiche links against its own vendored OpenSSL, so `openssl 0.10` must match quiche's internal version. If version conflicts occur, use `quiche::ffi::SSL_VERIFY_NONE` (a raw `u32` constant) instead and cast it via `std::mem::transmute`.
 
 ### 2.2 Server TLS Config
 

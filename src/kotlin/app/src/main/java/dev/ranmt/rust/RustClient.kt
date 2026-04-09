@@ -56,7 +56,6 @@ object RustClient {
             bitrateBps = config.bitrateBps.toUInt(),
             duration = 0uL,
             insecure = config.insecure,
-            certFingerprint = null,
             seed = 42uL
         )
         return try {

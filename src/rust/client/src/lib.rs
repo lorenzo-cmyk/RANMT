@@ -27,7 +27,6 @@ pub struct ClientConfig {
     pub bitrate_bps: u32,
     pub duration: u64,
     pub insecure: bool,
-    pub cert_fingerprint: Option<String>,
     pub seed: u64,
 }
 

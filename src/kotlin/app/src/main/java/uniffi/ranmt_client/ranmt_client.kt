@@ -1589,7 +1589,6 @@ data class FfiClientConfig(
     var `bitrateBps`: UInt,
     var `duration`: ULong,
     var `insecure`: Boolean,
-    var `certFingerprint`: String?,
     var `seed`: ULong
 
 ) {
@@ -1611,7 +1610,6 @@ object FfiConverterTypeFfiClientConfig : FfiConverterRustBuffer<FfiClientConfig>
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
         )
     }
@@ -1624,7 +1622,6 @@ object FfiConverterTypeFfiClientConfig : FfiConverterRustBuffer<FfiClientConfig>
                     FfiConverterUInt.allocationSize(value.`bitrateBps`) +
                     FfiConverterULong.allocationSize(value.`duration`) +
                     FfiConverterBoolean.allocationSize(value.`insecure`) +
-                    FfiConverterOptionalString.allocationSize(value.`certFingerprint`) +
                     FfiConverterULong.allocationSize(value.`seed`)
             )
 
@@ -1636,7 +1633,6 @@ object FfiConverterTypeFfiClientConfig : FfiConverterRustBuffer<FfiClientConfig>
         FfiConverterUInt.write(value.`bitrateBps`, buf)
         FfiConverterULong.write(value.`duration`, buf)
         FfiConverterBoolean.write(value.`insecure`, buf)
-        FfiConverterOptionalString.write(value.`certFingerprint`, buf)
         FfiConverterULong.write(value.`seed`, buf)
     }
 }

@@ -36,8 +36,6 @@ Options:
     -b, --bitrate <BPS>          Target bitrate in bps [default: 8000]
     -t, --duration <SEC>         Test duration in seconds
                                  [default: 0 = run until Ctrl+C]
-    --cert-fingerprint <HEX>     Optional SHA-256 fingerprint to pin
-                                 (skips CA verification)
     --insecure                   Disable certificate verification
                                  (dev mode only)
     --seed <SEED>                RNG seed for mock telemetry
@@ -51,7 +49,6 @@ Validation rules:
 - `--direction`: Required. Must be `"dl"` or `"ul"`.
 - `--bitrate`: **1 000 - 1 000 000** (1 kbps - 1 Mbps).
 - `--duration`: **0** = infinite. **> 0** = test stops after N seconds and sends `goodbye`.
-- `--cert-fingerprint` vs `--insecure`: Mutually exclusive. If neither provided, use system CA trust store.
 
 ### 4.3 Example Usage
 

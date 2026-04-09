@@ -33,7 +33,6 @@ pub struct FfiClientConfig {
     pub bitrate_bps: u32,
     pub duration: u64,
     pub insecure: bool,
-    pub cert_fingerprint: Option<String>,
     pub seed: u64,
 }
 
@@ -107,7 +106,6 @@ impl From<FfiClientConfig> for ClientConfig {
             bitrate_bps: value.bitrate_bps,
             duration: value.duration,
             insecure: value.insecure,
-            cert_fingerprint: value.cert_fingerprint,
             seed: value.seed,
         }
     }

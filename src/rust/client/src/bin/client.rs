@@ -29,10 +29,6 @@ struct Cli {
     #[arg(long)]
     insecure: bool,
 
-    /// SHA-256 fingerprint to pin (skips CA verification)
-    #[arg(long)]
-    cert_fingerprint: Option<String>,
-
     /// RNG seed for mock telemetry
     #[arg(long, default_value = "42")]
     seed: u64,
@@ -58,14 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if cli.insecure && cli.cert_fingerprint.is_some() {
-        return Err("--cert-fingerprint and --insecure are mutually exclusive".into());
-    }
-
-    if cli.cert_fingerprint.is_some() {
-        return Err("--cert-fingerprint is not implemented yet; use --insecure for dev or omit for CA verification".into());
-    }
-
     let config = ClientConfig {
         server_addr: cli.server,
         server_fqdn: None,
@@ -74,7 +62,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bitrate_bps: cli.bitrate,
         duration: cli.duration,
         insecure: cli.insecure,
-        cert_fingerprint: cli.cert_fingerprint,
         seed: cli.seed,
     };
 
