@@ -35,4 +35,4 @@ sessions.retain(|sid, sess| {
 });
 ```
 
-> **See** `datatypes.md §8` for the complete `SessionState` struct definition with all dormant lifecycle methods.
+> **See** `../protocol/datatypes-08-8-server-session-state.md` for the complete `SessionState` struct definition with all dormant lifecycle methods.

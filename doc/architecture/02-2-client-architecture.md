@@ -14,7 +14,7 @@ Client
 
 ### 2.2 Client Event Loop (simplified)
 
-The core client loop in `event_loop.rs`:
+The core client loop in `src/lib.rs`:
 
 ```
 loop {
@@ -80,7 +80,7 @@ outer loop:
 
 ### 2.4 Why `lib.rs` + `bin/`?
 
-- `lib.rs` contains all core logic — connection, event loop, telemetry, traffic generation.
-- `bin/client.rs` is a thin wrapper: parses CLI args, sets up tracing, calls `lib::run_client()`.
-- This separation allows future compilation to `cdylib` for UniFFI, where `lib::run_client()` becomes a Kotlin-callable function.
+- `src/lib.rs` contains all core logic — connection, event loop, telemetry, traffic generation.
+- `src/bin/client.rs` is a thin wrapper: parses CLI args, sets up tracing, calls `lib::run_client()`.
+- This separation allows compilation to `cdylib` for UniFFI, where `lib::run_client()` becomes a Kotlin-callable function.
 - `std::process::exit` is **never** called in `lib.rs`. Errors are returned or logged.

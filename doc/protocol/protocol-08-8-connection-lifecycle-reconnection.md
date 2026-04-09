@@ -32,7 +32,7 @@
    - UDP socket error on `recv_from()`.
    - Any `quiche::Error::Done` from `stream_recv`, `dgram_recv`, or `conn.send()` is **NORMAL** — it does NOT trigger disconnect. Only stream/socket-level failures do.
 
-2. **Reconnection delay:** **2000 ms** (fixed, not exponential backoff). While disconnected, telemetry continues to be generated and buffered (see Section 7).
+2. **Reconnection delay:** **2000 ms** (fixed, not exponential backoff). While disconnected, telemetry continues to be generated and buffered (see `protocol-07-7-store-and-forward-telemetry-the-tunnel-problem.md`).
 
 3. **Session ID persistence:** The `session_id` UUID is **constant** across all reconnections within the same test run. This allows the server to stitch all data into the same `session_<uuid>.jsonl` file.
 
