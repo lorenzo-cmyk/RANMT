@@ -4,7 +4,7 @@
 
 ```toml
 [workspace]
-members = ["client", "server", "shared"]
+members = ["shared", "client", "server"]
 resolver = "2"
 ```
 
@@ -14,12 +14,14 @@ resolver = "2"
 [package]
 name = "ranmt-shared"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1.8", features = ["serde", "v4"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+tracing = "0.1"
+getrandom = { version = "0.4", features = ["std"] }
 ```
 
 ### 3.3 Client crate
@@ -28,7 +30,7 @@ uuid = { version = "1.8", features = ["serde", "v4"] }
 [package]
 name = "ranmt-client"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "ranmt-client"
@@ -39,19 +41,24 @@ name = "ranmt_client"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib"]
 
+[features]
+default = []
+ffi = ["dep:uniffi", "dep:thiserror"]
+
 [dependencies]
 ranmt-shared = { path = "../shared" }
-quiche = "0.22"
-tokio = { version = "1.38", features = ["full"] }
-clap = { version = "4.5", features = ["derive"] }
+quiche = "0.28"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1.8", features = ["v4", "serde"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-getrandom = "0.3"
-openssl = "0.10"
-openssl-sys = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.4"
+uniffi = { version = "0.31", optional = true, features = ["tokio"] }
+thiserror = { version = "2", optional = true }
 ```
 
 ### 3.4 Server crate
@@ -60,7 +67,7 @@ openssl-sys = "0.9"
 [package]
 name = "ranmt-server"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "ranmt-server"
@@ -68,16 +75,16 @@ path = "src/main.rs"
 
 [dependencies]
 ranmt-shared = { path = "../shared" }
-quiche = "0.22"
-rcgen = "0.13"
-tokio = { version = "1.38", features = ["full"] }
-clap = { version = "4.5", features = ["derive"] }
+quiche = "0.28"
+rcgen = "0.14"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1.8", features = ["serde"] }
-getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde"] }
+getrandom = "0.4"
 ```
 
 ### 3.5 quiche Build Requirements
