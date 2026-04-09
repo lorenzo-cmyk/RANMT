@@ -12,7 +12,7 @@ Build steps (from repo root):
 	export ANDROID_NDK_HOME=/home/lorenzo/Android/Sdk/ndk/30.0.14904198
 
 2) Build the Rust library:
-	cargo ndk -t arm64-v8a -o android_client/app/src/main/jniLibs \
+	cargo ndk -t arm64-v8a -o src/kotlin/app/src/main/jniLibs \
 	  build -p ranmt-client --features ffi --release
 
 3) Install the UniFFI CLI and generate Kotlin bindings:
@@ -20,7 +20,7 @@ Build steps (from repo root):
 	uniffi-bindgen generate \
 	  --library target/aarch64-linux-android/release/libranmt_client.so \
 	  --language kotlin \
-	  --out-dir android_client/app/src/main/java
+	  --out-dir src/kotlin/app/src/main/java
 
 4) Ensure the Android app includes the JNA runtime dependency (AAR):
 	implementation("net.java.dev.jna:jna:5.14.0@aar")

@@ -8,6 +8,12 @@ RANMT/
 │   ├── implementation/     # Details about implementation
 │   └── protocol/           # Protocol and Type definitions
 └── src/
+    ├── kotlin/                 # Android App source code 
+    │   ├── build.gradle.kts
+    │   └── app/
+    │       └── src/
+    │           ├── main/java/  # Kotlin UI + UniFFI wrappers
+    │           └── main/jniLibs/ # Native rust .so builds
     └── rust/
         ├── Cargo.toml          # Workspace root
         ├── client/
