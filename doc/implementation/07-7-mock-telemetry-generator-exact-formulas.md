@@ -56,14 +56,14 @@ impl MockTelemetry {
 
 ### Oscillation Table
 
-| Field    | Center   | Amplitude | Period | Phase offset |
-|----------|----------|-----------|--------|-------------|
-| lat      | 41.9028  | 0.001     | ~12.57s| 0.0         |
-| lon      | 12.4964  | 0.001     | ~20.94s| 1.0         |
-| speed    | 60.0     | 60.0      | 60 s   | 0.0         |
-| rsrp     | -100.0   | 20.0      | 45 s   | 0.0         |
-| rsrq     | -11.5    | 8.5       | 45 s   | 0.5*TAU     |
-| sinr     | 10.0     | 15.0      | 50 s   | 1.2         |
+| Field | Center  | Amplitude | Period  | Phase offset |
+| ----- | ------- | --------- | ------- | ------------ |
+| lat   | 41.9028 | 0.001     | ~12.57s | 0.0          |
+| lon   | 12.4964 | 0.001     | ~20.94s | 1.0          |
+| speed | 60.0    | 60.0      | 60 s    | 0.0          |
+| rsrp  | -100.0  | 20.0      | 45 s    | 0.0          |
+| rsrq  | -11.5   | 8.5       | 45 s    | 0.5*TAU      |
+| sinr  | 10.0    | 15.0      | 50 s    | 1.2          |
 
 ### Reproducibility
 

@@ -29,10 +29,10 @@ QUIC assigns stream IDs according to a fixed formula. For bidirectional streams,
 
 We use a single client-initiated bidirectional stream for all application data, multiplexed by the JSON `"type"` field. This avoids the complexity of synchronizing reads/writes across multiple bidirectional streams and eliminates the question of stream ordering.
 
-| Purpose                 | QUIC Stream ID | Direction       | How it works                                                       |
-| ----------------------- | -------------- | --------------- | ------------------------------------------------------------------ |
-| All application data    | **0**          | Bidirectional   | Client opens first. Client writes Handshake + Telemetry. Server reads. Server writes ServerStats back. Both sides read by JSON type. |
-| QUIC Datagrams          | N/A            | Both directions | Not a stream. Uses `dgram_send()` / `dgram_recv()` for traffic.   |
+| Purpose              | QUIC Stream ID | Direction       | How it works                                                                                                                         |
+| -------------------- | -------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| All application data | **0**          | Bidirectional   | Client opens first. Client writes Handshake + Telemetry. Server reads. Server writes ServerStats back. Both sides read by JSON type. |
+| QUIC Datagrams       | N/A            | Both directions | Not a stream. Uses `dgram_send()` / `dgram_recv()` for traffic.                                                                      |
 
 #### Why a single stream?
 
