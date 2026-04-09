@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -79,7 +78,10 @@ fun SettingsScreen(
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
                     text = "Sampling",
                     style = MaterialTheme.typography.titleMedium,
@@ -119,7 +121,10 @@ fun SettingsScreen(
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
                     text = "Export",
                     style = MaterialTheme.typography.titleMedium,
@@ -144,7 +149,10 @@ fun SettingsScreen(
                 }
                 Text("Destination", style = MaterialTheme.typography.labelLarge)
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    listOf(ExportDestination.Share, ExportDestination.Downloads).forEachIndexed { index, mode ->
+                    listOf(
+                        ExportDestination.Share,
+                        ExportDestination.Downloads
+                    ).forEachIndexed { index, mode ->
                         SegmentedButton(
                             selected = destination == mode,
                             onClick = { destination = mode },
@@ -154,7 +162,10 @@ fun SettingsScreen(
                         }
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "CSV metadata",

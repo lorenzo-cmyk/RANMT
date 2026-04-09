@@ -4,26 +4,26 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.ranmt.ui.MainViewModel
 import dev.ranmt.ui.screens.HistoryScreen
 import dev.ranmt.ui.screens.NewMeasurementScreen
 import dev.ranmt.ui.screens.RunningScreen
-import dev.ranmt.ui.screens.SettingsScreen
 import dev.ranmt.ui.screens.SessionDetailScreen
+import dev.ranmt.ui.screens.SettingsScreen
 import dev.ranmt.ui.screens.saveFileToDownloads
 import dev.ranmt.ui.screens.shareFile
 import dev.ranmt.ui.theme.RANMTTheme
@@ -157,8 +157,15 @@ fun RANMTApp(openRunning: Boolean = false) {
                                     val file = viewModel.exportSession(id, format)
                                     if (file != null) {
                                         when (destination) {
-                                            dev.ranmt.data.ExportDestination.Share -> shareFile(context, file)
-                                            dev.ranmt.data.ExportDestination.Downloads -> saveFileToDownloads(context, file)
+                                            dev.ranmt.data.ExportDestination.Share -> shareFile(
+                                                context,
+                                                file
+                                            )
+
+                                            dev.ranmt.data.ExportDestination.Downloads -> saveFileToDownloads(
+                                                context,
+                                                file
+                                            )
                                         }
                                     }
                                 }

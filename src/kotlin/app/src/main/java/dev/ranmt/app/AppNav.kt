@@ -30,7 +30,8 @@ fun RANMTBottomBar(navController: NavHostController, modifier: Modifier = Modifi
 
     BottomAppBar(modifier = modifier) {
         items.forEach { destination ->
-            val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true
+            val selected =
+                currentDestination?.hierarchy?.any { it.route == destination.route } == true
             NavigationBarItem(
                 selected = selected,
                 onClick = {

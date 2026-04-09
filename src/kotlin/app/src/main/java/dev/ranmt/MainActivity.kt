@@ -12,10 +12,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            RANMTApp(openRunning = intent.getBooleanExtra(
-                dev.ranmt.service.MeasurementService.EXTRA_OPEN_RUNNING,
-                false
-            ))
+            RANMTApp(
+                openRunning = intent.getBooleanExtra(
+                    dev.ranmt.service.MeasurementService.EXTRA_OPEN_RUNNING,
+                    false
+                )
+            )
         }
     }
 

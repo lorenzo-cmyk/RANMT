@@ -7,12 +7,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.ranmt.data.ConnectionState
-import dev.ranmt.data.MeasurementConfig
-import dev.ranmt.data.ExportFormat
 import dev.ranmt.data.AppSettings
 import dev.ranmt.data.AppSettingsStore
+import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.ExportDestination
+import dev.ranmt.data.ExportFormat
+import dev.ranmt.data.MeasurementConfig
 import dev.ranmt.data.SessionDetail
 import dev.ranmt.data.SessionRepository
 import dev.ranmt.data.SessionSummary
@@ -20,9 +20,9 @@ import dev.ranmt.service.MeasurementService
 import dev.ranmt.service.RunningSessionState
 import dev.ranmt.service.RunningUiState
 import dev.ranmt.service.SessionPrefs
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SessionRepository(application)

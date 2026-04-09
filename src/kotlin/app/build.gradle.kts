@@ -33,7 +33,7 @@ android {
         manifestPlaceholders["MAPS_API_KEY"] =
             (project.findProperty("MAPS_API_KEY") as String?)
                 ?: readEnvValue("MAPS_KEY")
-                ?: ""
+                        ?: ""
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

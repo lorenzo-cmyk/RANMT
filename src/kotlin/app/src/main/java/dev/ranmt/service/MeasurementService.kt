@@ -9,31 +9,31 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.TelephonyManager
-import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import dev.ranmt.R
+import dev.ranmt.data.AccuracyMode
+import dev.ranmt.data.AppSettingsStore
 import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.MeasurementConfig
-import dev.ranmt.data.AppSettingsStore
-import dev.ranmt.data.AccuracyMode
 import dev.ranmt.data.SessionMetrics
 import dev.ranmt.data.SessionRepository
 import dev.ranmt.data.SessionSummary
-import dev.ranmt.data.TelemetryPoint
 import dev.ranmt.data.TelemetryAggregate
+import dev.ranmt.data.TelemetryPoint
 import dev.ranmt.data.TransportStats
 import dev.ranmt.rust.RustClient
 import dev.ranmt.rust.RustClientHandle
@@ -246,7 +246,8 @@ class MeasurementService : Service() {
         }
         val network = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(network)
-        val hasInternet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val hasInternet =
+            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         val state = if (hasInternet) ConnectionState.Connected else ConnectionState.Reconnecting
         RunningSessionState.updateConnection(state)
     }
@@ -342,7 +343,11 @@ class MeasurementService : Service() {
             connectivityManager.requestNetwork(request, callback)
             networkCallback = callback
         } catch (err: SecurityException) {
-            android.util.Log.e("MeasurementService", "Wi-Fi bind requires CHANGE_NETWORK_STATE", err)
+            android.util.Log.e(
+                "MeasurementService",
+                "Wi-Fi bind requires CHANGE_NETWORK_STATE",
+                err
+            )
         }
     }
 
@@ -381,6 +386,7 @@ class MeasurementService : Service() {
                     networkType = networkType
                 )
             }
+
             is CellInfoLte -> {
                 val identity = registered.cellIdentity
                 val signal = registered.cellSignalStrength
@@ -394,6 +400,7 @@ class MeasurementService : Service() {
                     networkType = networkType
                 )
             }
+
             else -> RadioSnapshot(networkType = networkType)
         }
     }

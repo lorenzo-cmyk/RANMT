@@ -7,9 +7,12 @@ class AppSettingsStore(context: Context) {
 
     fun load(): AppSettings {
         val interval = prefs.getLong(KEY_INTERVAL, 1000L)
-        val accuracy = prefs.getString(KEY_ACCURACY, AccuracyMode.High.name) ?: AccuracyMode.High.name
-        val format = prefs.getString(KEY_EXPORT_FORMAT, ExportFormat.Csv.name) ?: ExportFormat.Csv.name
-        val destination = prefs.getString(KEY_EXPORT_DEST, ExportDestination.Share.name) ?: ExportDestination.Share.name
+        val accuracy =
+            prefs.getString(KEY_ACCURACY, AccuracyMode.High.name) ?: AccuracyMode.High.name
+        val format =
+            prefs.getString(KEY_EXPORT_FORMAT, ExportFormat.Csv.name) ?: ExportFormat.Csv.name
+        val destination = prefs.getString(KEY_EXPORT_DEST, ExportDestination.Share.name)
+            ?: ExportDestination.Share.name
         val includeMeta = prefs.getBoolean(KEY_CSV_META, true)
         return AppSettings(
             samplingIntervalMs = interval.coerceAtLeast(250L),

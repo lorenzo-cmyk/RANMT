@@ -107,22 +107,23 @@ object RustClient {
         val jitter = snapshot.jitterMs
         val jitterEwma = snapshot.jitterEwmaMs
         val lossSource = snapshot.lossJitterSource?.let { mapSource(it) }
-        val transport = if (server != null || lossPct != null || jitter != null || jitterEwma != null) {
-            TransportStats(
-                rttMs = server?.quicStats?.rttMs,
-                txBytes = server?.quicStats?.txBytes?.toLong(),
-                rxBytes = server?.quicStats?.rxBytes?.toLong(),
-                cwnd = server?.quicStats?.cwnd?.toLong(),
-                lostPackets = server?.quicStats?.lostPackets?.toLong(),
-                sendRateBps = server?.quicStats?.sendRateBps?.toLong(),
-                lossPct = lossPct,
-                jitterMs = jitter,
-                jitterEwmaMs = jitterEwma,
-                lossJitterSource = lossSource
-            )
-        } else {
-            null
-        }
+        val transport =
+            if (server != null || lossPct != null || jitter != null || jitterEwma != null) {
+                TransportStats(
+                    rttMs = server?.quicStats?.rttMs,
+                    txBytes = server?.quicStats?.txBytes?.toLong(),
+                    rxBytes = server?.quicStats?.rxBytes?.toLong(),
+                    cwnd = server?.quicStats?.cwnd?.toLong(),
+                    lostPackets = server?.quicStats?.lostPackets?.toLong(),
+                    sendRateBps = server?.quicStats?.sendRateBps?.toLong(),
+                    lossPct = lossPct,
+                    jitterMs = jitter,
+                    jitterEwmaMs = jitterEwma,
+                    lossJitterSource = lossSource
+                )
+            } else {
+                null
+            }
         return RustSnapshot(state = state, transport = transport)
     }
 

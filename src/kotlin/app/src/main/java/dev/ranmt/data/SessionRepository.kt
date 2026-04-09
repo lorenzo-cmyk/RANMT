@@ -30,7 +30,11 @@ class SessionRepository(private val context: Context) {
 
         val resolvedSummary = summary ?: buildSummary(id, telemetry)
         val resolvedMetrics = metrics ?: buildMetrics(telemetry)
-        return SessionDetail(summary = resolvedSummary, metrics = resolvedMetrics, telemetry = telemetry)
+        return SessionDetail(
+            summary = resolvedSummary,
+            metrics = resolvedMetrics,
+            telemetry = telemetry
+        )
     }
 
     fun deleteSession(id: String) {

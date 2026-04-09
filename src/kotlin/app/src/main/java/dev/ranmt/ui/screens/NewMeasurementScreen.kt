@@ -30,12 +30,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +77,7 @@ fun NewMeasurementScreen(
     fun refreshStatus() {
         val states = permissionList.associate { (permission, _) ->
             permission to (ContextCompat.checkSelfPermission(context, permission) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    android.content.pm.PackageManager.PERMISSION_GRANTED)
         }
         permissionStates = states
         allGranted = states.values.all { it }
@@ -129,7 +129,10 @@ fun NewMeasurementScreen(
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
                     text = "Configuration",
                     style = MaterialTheme.typography.titleMedium,
@@ -177,7 +180,10 @@ fun NewMeasurementScreen(
                         }
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Insecure TLS",
@@ -208,7 +214,10 @@ fun NewMeasurementScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
                     text = "Before You Start",
                     style = MaterialTheme.typography.titleMedium,

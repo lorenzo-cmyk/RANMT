@@ -1,8 +1,8 @@
 package dev.ranmt.ui.screens
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Button
@@ -31,8 +31,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -136,16 +136,25 @@ fun SessionDetailScreen(
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             Text("Rows: $rows", style = MaterialTheme.typography.bodyMedium)
                             sessionFileSize?.let { size ->
-                                Text("File size: ${formatBytes(size)}", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "File size: ${formatBytes(size)}",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                             }
                         }
                     }
                     Text("Format", style = MaterialTheme.typography.labelLarge)
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        listOf(ExportFormat.Csv, ExportFormat.Jsonl).forEachIndexed { index, format ->
+                        listOf(
+                            ExportFormat.Csv,
+                            ExportFormat.Jsonl
+                        ).forEachIndexed { index, format ->
                             SegmentedButton(
                                 selected = exportFormat == format,
                                 onClick = { setExportFormat(format) },
@@ -157,7 +166,10 @@ fun SessionDetailScreen(
                     }
                     Text("Destination", style = MaterialTheme.typography.labelLarge)
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        listOf(ExportDestination.Share, ExportDestination.Downloads).forEachIndexed { index, destination ->
+                        listOf(
+                            ExportDestination.Share,
+                            ExportDestination.Downloads
+                        ).forEachIndexed { index, destination ->
                             SegmentedButton(
                                 selected = exportDestination == destination,
                                 onClick = { setExportDestination(destination) },
@@ -214,13 +226,19 @@ private fun OverviewPanel(detail: SessionDetail) {
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("Duration", formatDuration(detail.summary.durationSec))
                 MetricTile("Primary RAN", detail.summary.primaryRat)
                 MetricTile("Avg Speed", formatSpeed(avgSpeed))
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("Bytes Tx", formatBytes(detail.metrics.bytesSent))
                 MetricTile("Bytes Rx", formatBytes(detail.metrics.bytesReceived))
                 MetricTile("Drops", detail.metrics.connectionDrops.toString())
@@ -231,8 +249,10 @@ private fun OverviewPanel(detail: SessionDetail) {
 
 @Composable
 private fun RadioPanel(detail: SessionDetail) {
-    val rsrqStats = remember(detail.telemetry) { rangeStat(detail.telemetry) { it.rsrq.toDouble() } }
-    val sinrStats = remember(detail.telemetry) { rangeStat(detail.telemetry) { it.sinr.toDouble() } }
+    val rsrqStats =
+        remember(detail.telemetry) { rangeStat(detail.telemetry) { it.rsrq.toDouble() } }
+    val sinrStats =
+        remember(detail.telemetry) { rangeStat(detail.telemetry) { it.sinr.toDouble() } }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -244,19 +264,28 @@ private fun RadioPanel(detail: SessionDetail) {
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("RSRP Max", "${detail.metrics.maxRsrp} dBm")
                 MetricTile("RSRP Avg", "${detail.metrics.avgRsrp} dBm")
                 MetricTile("RSRP Min", "${detail.metrics.minRsrp} dBm")
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("RSRQ Max", formatDb(rsrqStats.max))
                 MetricTile("RSRQ Min", formatDb(rsrqStats.min))
                 MetricTile("SINR Max", formatDb(sinrStats.max))
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("SINR Min", formatDb(sinrStats.min))
             }
         }
@@ -277,7 +306,10 @@ private fun TransportPanel(detail: SessionDetail) {
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 MetricTile("Peak Jitter", formatJitter(detail.metrics.peakJitterMs))
                 MetricTile("Max Loss", formatPct(lossStats.maxLossPct))
                 MetricTile("Loss Samples", formatPct(lossStats.lossSamplePct))
@@ -342,7 +374,10 @@ private fun MapPanel(points: List<TelemetryPoint>) {
                         ),
                     cameraPositionState = cameraPositionState,
                     properties = MapProperties(isMyLocationEnabled = false),
-                    uiSettings = MapUiSettings(zoomControlsEnabled = false, myLocationButtonEnabled = false),
+                    uiSettings = MapUiSettings(
+                        zoomControlsEnabled = false,
+                        myLocationButtonEnabled = false
+                    ),
                     onMapLoaded = { setMapLoaded(true) }
                 ) {
                     sampledPoints.forEach { point ->
@@ -391,7 +426,10 @@ private data class LossStats(val maxLossPct: Double, val lossSamplePct: Double)
 
 private data class RangeStat(val min: Double, val max: Double)
 
-private fun rangeStat(points: List<TelemetryPoint>, selector: (TelemetryPoint) -> Double): RangeStat {
+private fun rangeStat(
+    points: List<TelemetryPoint>,
+    selector: (TelemetryPoint) -> Double
+): RangeStat {
     if (points.isEmpty()) return RangeStat(0.0, 0.0)
     var min = Double.MAX_VALUE
     var max = -Double.MAX_VALUE
@@ -494,7 +532,10 @@ fun saveFileToDownloads(context: Context, file: java.io.File) {
     }
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
-        put(MediaStore.MediaColumns.MIME_TYPE, if (file.extension.lowercase() == "csv") "text/csv" else "application/x-ndjson")
+        put(
+            MediaStore.MediaColumns.MIME_TYPE,
+            if (file.extension.lowercase() == "csv") "text/csv" else "application/x-ndjson"
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
