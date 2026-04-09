@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -15,25 +17,13 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        fun readEnvValue(key: String): String? {
-            val envFile = rootProject.file(".env")
-            if (!envFile.exists()) return null
-            envFile.readLines()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("#") }
-                .forEach { line ->
-                    val parts = line.split("=", limit = 2)
-                    if (parts.size == 2 && parts[0].trim() == key) {
-                        return parts[1].trim().trim('"', '\'')
-                    }
-                }
-            return null
+        val localProperties = Properties()
+        val localPropertiesFile = rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.inputStream().use { localProperties.load(it) }
         }
 
-        manifestPlaceholders["MAPS_API_KEY"] =
-            (project.findProperty("MAPS_API_KEY") as String?)
-                ?: readEnvValue("MAPS_KEY")
-                        ?: ""
+        manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY", "")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

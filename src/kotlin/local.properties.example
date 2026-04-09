@@ -1,0 +1,9 @@
+# This file is checked into version control only for reference. 
+# Adapt the actual local.properties file accordingly, but do 
+# NOT check it in, as it contains information specific to your 
+# local configuration and API keys.
+
+# Android SDK location.
+sdk.dir=/home/lorenzo/Android/Sdk
+# Google Maps API key. This is a placeholder value :)
+MAPS_API_KEY=cpJ42iNlFWZMyYqBR49Dbzb5aUyMNMe9
