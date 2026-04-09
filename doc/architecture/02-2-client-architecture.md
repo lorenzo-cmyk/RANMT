@@ -2,19 +2,14 @@
 
 ### 2.1 Layered Structure
 
-```
+```text
 Client
-├── lib.rs            # Core logic — reusable by CLI, future UniFFI/Android
-│   ├── config        # Connection config (server addr, port, session_id, direction, bitrate)
-│   ├── connection    # QUIC connection builder & reconnection loop
-│   ├── event_loop    # Main quiche event loop (tokio select!)
-│   ├── streams       # Stream 0 (bidi: handshake, stats in, telemetry out)
-│   ├── datagrams     # Traffic pacer, datagram send/recv
-│   ├── telemetry     # Telemetry generation, VecDeque buffer, flush protocol
-│   └── codec         # JSON serialization/deserialization
-│
-├── bin/client.rs     # CLI entry point — clap args, logging, tokio runtime
-└── Cargo.toml        # crate-type = ["lib", "cdylib"] (for future uniffi)
+├── src/
+│   ├── lib.rs            # Core logic — connection builder, event loop, telemetry, config, codec
+│   ├── ffi.rs            # UniFFI bindings for Android integration
+│   └── bin/
+│       └── client.rs     # CLI entry point — clap args, logging, tokio runtime
+└── Cargo.toml            # crate-type = ["lib", "cdylib"] (for uniffi)
 ```
 
 ### 2.2 Client Event Loop (simplified)

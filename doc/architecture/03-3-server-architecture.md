@@ -2,8 +2,8 @@
 
 ### 3.1 Component Breakdown
 
-```
-Server (bin/server.rs)
+```text
+Server (src/main.rs)
 ├── UDP socket: bound to 0.0.0.0:<port>
 ├── Connection Map: HashMap<ConnectionId, QuicConnection>
 ├── Session Registry: HashMap<SessionId, SessionState>

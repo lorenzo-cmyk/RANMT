@@ -1,38 +1,28 @@
 ## 5. File Layout (Planned)
 
-```
+```text
 RANMT/
 ├── Cargo.toml              # Workspace root
 ├── doc/
-│   ├── protocol.md           # Wire protocol specification
-│   ├── architecture.md       # This file
-│   ├── datatypes.md          # Rust struct definitions + wire formats
-│   └── implementation-details.md  # Config, deps, CLI, build instructions
+│   ├── android/            # Android App documentation
+│   ├── architecture/       # System architecture documentation
+│   ├── implementation/     # Details about implementation
+│   └── protocol/           # Protocol and Type definitions
 ├── client/
 │   ├── Cargo.toml          # crate-type = ["lib", "cdylib"]
-│   ├── src/
-│   │   ├── lib.rs          # Public API: run_client(), ClientConfig
-│   │   ├── bin/
-│   │   │   └── client.rs   # CLI entry point
-│   │   ├── config.rs       # ClientConfig struct
-│   │   ├── connection.rs   # QUIC connection builder, reconnection loop
-│   │   ├── event_loop.rs   # Main tokio event loop
-│   │   ├── datagrams.rs    # Traffic pacer, datagram send/recv, loss/jitter
-│   │   ├── telemetry.rs    # Telemetry generator, VecDeque buffer, flush
-│   │   └── codec.rs        # JSON serialization helpers
+│   └── src/
+│       ├── lib.rs          # Public API: run_client(), ClientConfig
+│       ├── ffi.rs          # UniFFI bindings
+│       └── bin/
+│           └── client.rs   # CLI entry point
 │
 ├── server/
 │   ├── Cargo.toml
 │   └── src/
-│       ├── main.rs         # Server entry point
-│       ├── config.rs       # Server config
-│       ├── connection.rs   # Server-side QUIC connection management
-│       ├── event_loop.rs   # Server event loop
-│       ├── session.rs      # SessionState, JSONL management
-│       ├── datagrams.rs    # Datagram recv, loss/jitter calc, traffic sender
-│       └── stats.rs        # Server stats collection & sending
+│       └── main.rs         # Server entry point, Event loop, Session management, Datagram recv/send
 │
 └── shared/
+    ├── Cargo.toml
     └── src/
         └── lib.rs          # Shared types: Handshake, Telemetry, Stats, etc.
 ```
