@@ -8,6 +8,7 @@ Use `cargo-ndk` to build the Rust `cdylib` for the desired Android ABI:
 
 ```bash
 cd src/rust
+export ANDROID_NDK_HOME=/home/lorenzo/Android/Sdk/ndk/30.0.14904198
 cargo install cargo-ndk
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo ndk -t arm64-v8a -o ../kotlin/app/src/main/jniLibs build -p ranmt-client --features ffi --release
@@ -30,7 +31,7 @@ cargo ndk -t x86_64 -o ../kotlin/app/src/main/jniLibs build -p ranmt-client --fe
 Generate Kotlin sources from the built library:
 
 ```bash
-cargo install uniffi-bindgen
+cargo install uniffi --features cli
 uniffi-bindgen generate \
     --library target/aarch64-linux-android/release/libranmt_client.so \
     --language kotlin \

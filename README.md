@@ -43,7 +43,7 @@ It is built utilizing **QUIC (RFC 9000)** and **Unreliable Datagrams (RFC 9221)*
 - `src/rust/client/`: The core client crate containing the QUIC event loop. Exposes a command-line interface as well as a C-ABI via UniFFI (`ffi.rs`).
 - `src/kotlin/`: The modern Android 15 mobile application integrating the Rust library via JNI.
 
-## Getting Started (CLI)
+## Getting Started
 
 ### 1. Start the Server
 
@@ -62,9 +62,38 @@ ranmt-server --port 4433 \
     --output-dir ./ranmt-sessions
 ```
 
-### 2. Run the CLI Client
+### 2. Build the Android Client (Primary Client)
 
-Use the CLI client to test an Uplink (UL) or Downlink (DL) connection. Use `--insecure` when testing against a server with a development certificate:
+The primary client for RANMT is the exclusive **Android 15 application**. The CLI is purely used as a development stub.
+
+Before compiling the Android App in Android Studio, you'll need `cargo-ndk` and `uniffi-bindgen` to compile the core Rust library and generate the Kotlin bindings into the correct JNI library path:
+
+1. Target configuration and ABI builds:
+```bash
+cd src/rust
+export ANDROID_NDK_HOME=/home/lorenzo/Android/Sdk/ndk/30.0.14904198
+cargo install cargo-ndk
+rustup target add aarch64-linux-android x86_64-linux-android
+
+# Build native .so libraries for 64-bit ARM (Device) and x86_64 (Emulator)
+cargo ndk -t arm64-v8a -o ../kotlin/app/src/main/jniLibs build -p ranmt-client --features ffi --release
+cargo ndk -t x86_64 -o ../kotlin/app/src/main/jniLibs build -p ranmt-client --features ffi --release
+```
+
+2. Generate Kotlin FFI bindings:
+```bash
+cargo install uniffi --features cli
+uniffi-bindgen generate \
+    --library target/aarch64-linux-android/release/libranmt_client.so \
+    --language kotlin \
+    --out-dir ../kotlin/app/src/main/java
+```
+
+Once generated, you can open `src/kotlin` in **Android Studio** and build the mobile application.
+
+### 3. Testing with the CLI Stub
+
+For quick server tests without deploying to a phone, use the Rust CLI stub to emulate an Uplink (UL) or Downlink (DL) connection. Use `--insecure` when testing against a server with a development certificate:
 
 ```bash
 cd src/rust
