@@ -89,6 +89,8 @@ uniffi-bindgen generate \
     --out-dir ../kotlin/app/src/main/java
 ```
 
+3. **Google Maps API Key**: To ensure the map renders properly within the Android application, you must provide a valid Google Maps API Key in your configuration (e.g., via `local.properties` or as instructed by regular Google Maps setup for Android) prior to building.
+
 Once generated, you can open `src/kotlin` in **Android Studio** and build the mobile application.
 
 ### 3. Testing with the CLI Stub
