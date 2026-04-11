@@ -19,6 +19,7 @@ import android.telephony.CellInfoNr
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.Granularity
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -65,6 +66,7 @@ class MeasurementService : Service() {
     private var lastTransportStats: TransportStats? = null
     private var wifiNetwork: Network? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var kalmanFilter: GpsKalmanFilter? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -193,22 +195,53 @@ class MeasurementService : Service() {
             AccuracyMode.High -> Priority.PRIORITY_HIGH_ACCURACY
             AccuracyMode.Balanced -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
         }
+
+        kalmanFilter = when (settings.vehicleProfile) {
+            dev.ranmt.data.VehicleProfile.Train -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 0.4,
+                maxPlausibleAccelMps2 = 1.2
+            )
+
+            dev.ranmt.data.VehicleProfile.Car -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 2.0,
+                maxPlausibleAccelMps2 = 5.0
+            )
+
+            dev.ranmt.data.VehicleProfile.Walking -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 1.0,
+                maxPlausibleAccelMps2 = 3.0
+            )
+
+            dev.ranmt.data.VehicleProfile.Generic -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 1.5,
+                maxPlausibleAccelMps2 = 4.0
+            )
+        }
+
         val request = LocationRequest.Builder(priority, settings.samplingIntervalMs)
-            .setMinUpdateIntervalMillis(settings.samplingIntervalMs)
-            .setMinUpdateDistanceMeters(0f)
+            .setMinUpdateIntervalMillis(settings.samplingIntervalMs / 2) // Allow faster updates if available.
+            .setMinUpdateDistanceMeters(0f) // Don't filter by distance; we'll handle it in the callback if needed.
+            .setGranularity(Granularity.GRANULARITY_FINE) // Request full location details if possible.
+            .setMaxUpdateDelayMillis(settings.samplingIntervalMs * 2) // Allow batching up to 2 intervals.
             .build()
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val id = sessionId ?: return
                 result.locations.forEach { location ->
+                    val filtered = kalmanFilter?.update(location)
                     val snapshot = snapshotRadio()
                     val transport = lastTransportStats
+
+                    val finalSpeed = filtered?.speedMs?.toDouble() ?: location.speed.toDouble()
+                    val finalLat = filtered?.latitude ?: location.latitude
+                    val finalLon = filtered?.longitude ?: location.longitude
+
                     val point = TelemetryPoint(
                         timestamp = location.time,
-                        lat = location.latitude,
-                        lon = location.longitude,
-                        speedMps = location.speed.toDouble(),
+                        lat = finalLat,
+                        lon = finalLon,
+                        speedMps = finalSpeed,
                         rsrp = snapshot.rsrp,
                         rsrq = snapshot.rsrq,
                         sinr = snapshot.sinr,
@@ -238,6 +271,8 @@ class MeasurementService : Service() {
         LocationServices.getFusedLocationProviderClient(this)
             .removeLocationUpdates(callback)
         locationCallback = null
+        kalmanFilter?.reset()
+        kalmanFilter = null
     }
 
     private fun updateConnectionState() {

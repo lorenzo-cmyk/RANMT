@@ -99,10 +99,15 @@ enum class AccuracyMode {
     High
 }
 
+enum class VehicleProfile {
+    Train, Car, Walking, Generic
+}
+
 data class AppSettings(
     val samplingIntervalMs: Long = 1000L,
     val accuracyMode: AccuracyMode = AccuracyMode.High,
     val defaultExportFormat: ExportFormat = ExportFormat.Csv,
     val defaultExportDestination: ExportDestination = ExportDestination.Share,
-    val includeMetadataInCsv: Boolean = true
+    val includeMetadataInCsv: Boolean = true,
+    val vehicleProfile: VehicleProfile = VehicleProfile.Generic
 )
