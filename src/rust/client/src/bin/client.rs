@@ -57,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ClientConfig {
         server_addr: cli.server,
         server_fqdn: None,
+        session_id: None,
         port: cli.port,
         direction,
         bitrate_bps: cli.bitrate,
