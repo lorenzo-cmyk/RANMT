@@ -476,7 +476,7 @@ fn process_stream_messages(
 }
 
 #[tracing::instrument("conn", skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = %entry.session_id.map_or("none".to_string(), |u| u.to_string())))]
-fn process_datagrams(scid: &[u8; 16], entry: &mut ActiveConn, _session: &mut SessionState) {
+fn process_datagrams(scid: &[u8; 16], entry: &mut ActiveConn, session: &mut SessionState) {
     if entry.direction != Some(Direction::Ul) {
         return;
     }
@@ -491,8 +491,13 @@ fn process_datagrams(scid: &[u8; 16], entry: &mut ActiveConn, _session: &mut Ses
                     tracing::warn!(size = n, "UL datagram size mismatch, skipping");
                     continue;
                 }
-                if let Some((seq_num, _send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
+                if let Some((seq_num, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
                     tracing::info!(seq = seq_num, "UL datagram received");
+                    session.write_traffic_datagram(&TrafficDatagram {
+                        seq_num,
+                        send_ts_ms: send_ts,
+                        recv_ts_ms: current_epoch_ms(),
+                    });
                 }
             }
             Ok(_) | Err(quiche::Error::Done) => break,

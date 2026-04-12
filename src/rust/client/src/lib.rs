@@ -250,8 +250,16 @@ pub async fn run_client_with_state(
     let session_id = config
         .session_id
         .as_ref()
-        .and_then(|id| core::str::FromStr::from_str(id).ok())
-        .unwrap_or_else(|| uuid::Uuid::new_v4());
+        .and_then(|id| {
+            match core::str::FromStr::from_str(id) {
+                Ok(uuid) => Some(uuid),
+                Err(_) => {
+                    tracing::warn!(session_id = %id, "failed to parse session_id as UUID, generating new one");
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(uuid::Uuid::new_v4);
 
     tracing::info!(session_id = %session_id, "starting RANMT client");
 
@@ -464,8 +472,10 @@ pub async fn run_client_with_state(
                                 tracing::warn!(size = n, "DL datagram size mismatch, skipping");
                                 continue;
                             }
-                            if let Some((seq, _send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
-                                tracing::debug!(seq, "DL datagram received");
+                            if let Some((seq, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
+                                let now = current_epoch_ms();
+                                let owd_ms = now.saturating_sub(send_ts) as f64;
+                                tracing::debug!(seq, owd_ms, "DL datagram received");
                             }
                         }
                         Ok(_) | Err(quiche::Error::Done) => break,

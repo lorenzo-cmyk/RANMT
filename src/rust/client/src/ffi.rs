@@ -125,14 +125,24 @@ impl From<FfiClientTelemetry> for ranmt_shared::ClientTelemetry {
             lat: value.lat,
             lon: value.lon,
             speed: value.speed_mps,
-            network_type: match value.network_type.to_lowercase().as_str() {
-                "5g" => ranmt_shared::NetworkType::FiveG,
-                "lte" => ranmt_shared::NetworkType::Lte,
-                "3g" => ranmt_shared::NetworkType::ThreeG,
-                "2g" => ranmt_shared::NetworkType::TwoG,
-                _ => ranmt_shared::NetworkType::Unknown,
+            network_type: {
+                let lower = value.network_type.to_lowercase();
+                if lower.starts_with("5g") {
+                    ranmt_shared::NetworkType::FiveG
+                } else if lower.starts_with("lte") {
+                    ranmt_shared::NetworkType::Lte
+                } else if lower.starts_with("3g") || lower.starts_with("hspa") || lower.starts_with("umts") {
+                    ranmt_shared::NetworkType::ThreeG
+                } else if lower.starts_with("2g") || lower.starts_with("gsm") || lower.starts_with("edge") {
+                    ranmt_shared::NetworkType::TwoG
+                } else {
+                    ranmt_shared::NetworkType::Unknown
+                }
             },
-            cell_id: value.cell_id.parse().unwrap_or(0),
+            cell_id: value.cell_id.parse().unwrap_or_else(|_| {
+                tracing::warn!(cell_id = %value.cell_id, "cell_id is not a valid integer, defaulting to 0");
+                0
+            }),
             pci: value.pci as u16,
             earfcn: value.earfcn as u32,
             rsrp: value.rsrp as f64,
@@ -204,7 +214,13 @@ pub async fn start_client(config: FfiClientConfig) -> Result<ClientHandle, Clien
             .map_err(|err| err.to_string())
     });
 
-    Ok(ClientHandle::new(task, cancel, snapshot, telemetry_tx, runtime))
+    Ok(ClientHandle::new(
+        task,
+        cancel,
+        snapshot,
+        telemetry_tx,
+        runtime,
+    ))
 }
 
 #[uniffi::export(async_runtime = "tokio")]

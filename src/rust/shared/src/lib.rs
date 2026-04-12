@@ -57,16 +57,11 @@ pub struct HandshakeAck {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HandshakeStatus {
     Ok,
     Error,
-}
-impl PartialEq for HandshakeStatus {
-    fn eq(&self, other: &Self) -> bool {
-        core::mem::discriminant(self) == core::mem::discriminant(other)
-    }
 }
 
 // ─────────────────────────────────────────────
@@ -144,6 +139,17 @@ pub enum NetworkType {
 }
 
 // ─────────────────────────────────────────────
+// Traffic Datagram (for JSONL persistence)
+// ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrafficDatagram {
+    pub seq_num: u64,
+    pub send_ts_ms: u64,
+    pub recv_ts_ms: u64,
+}
+
+// ─────────────────────────────────────────────
 // WireMessage (serde tag owner)
 // ─────────────────────────────────────────────
 
@@ -160,6 +166,8 @@ pub enum WireMessage {
     ClientTelemetry(ClientTelemetry),
     #[serde(rename = "goodbye")]
     Goodbye(Goodbye),
+    #[serde(rename = "traffic_datagram")]
+    TrafficDatagram(TrafficDatagram),
 }
 
 // ─────────────────────────────────────────────
@@ -325,6 +333,10 @@ impl SessionState {
 
     pub fn write_server_stats(&mut self, stats: &ServerStats) {
         self.append_wire_message(&WireMessage::ServerStats(stats.clone()));
+    }
+
+    pub fn write_traffic_datagram(&mut self, dgram: &TrafficDatagram) {
+        self.append_wire_message(&WireMessage::TrafficDatagram(dgram.clone()));
     }
 
     fn append_wire_message(&mut self, msg: &WireMessage) {
