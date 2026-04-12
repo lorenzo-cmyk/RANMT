@@ -257,14 +257,17 @@ fn log_measurement_state(
             let rttvar_ms = stats.map(|s| s.rttvar_ms);
             let lost_packets = stats.map(|s| s.lost_packets);
 
+            let _span = match bound_scid {
+                Some(ref scid) => tracing::info_span!("conn", scid = ?quiche::ConnectionId::from_ref(scid), sid = %sid).entered(),
+                None => tracing::info_span!("conn", scid = "none", sid = %sid).entered(),
+            };
+
             tracing::info!(
-                session_id = ?sid,
                 state,
                 direction = ?sess.direction,
                 bitrate_bps = sess.bitrate_bps,
                 conn_open,
                 conn_established,
-                bound_scid = ?bound_scid,
                 peer = ?conn_entry.map(|e| e.peer),
                 last_rx_age_ms,
                 last_stream_age_ms,
@@ -274,14 +277,17 @@ fn log_measurement_state(
                 "measurement detail"
             );
         } else {
+            let _span = match bound_scid {
+                Some(ref scid) => tracing::info_span!("conn", scid = ?quiche::ConnectionId::from_ref(scid), sid = %sid).entered(),
+                None => tracing::info_span!("conn", scid = "none", sid = %sid).entered(),
+            };
+
             tracing::info!(
-                session_id = ?sid,
                 state,
                 direction = ?sess.direction,
                 bitrate_bps = sess.bitrate_bps,
                 conn_open,
                 conn_established,
-                bound_scid = ?bound_scid,
                 peer = ?conn_entry.map(|e| e.peer),
                 last_rx_age_ms,
                 last_stream_age_ms,
@@ -297,7 +303,7 @@ fn log_measurement_state(
 // Stream 0 processing helpers
 // ─────────────────────────────────────
 
-#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
+#[tracing::instrument("conn", skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = %entry.session_id.map_or("none".to_string(), |u| u.to_string())))]
 fn process_stream_messages(
     scid: &[u8; 16],
     entry: &mut ActiveConn,
@@ -469,7 +475,7 @@ fn process_stream_messages(
     }
 }
 
-#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
+#[tracing::instrument("conn", skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = %entry.session_id.map_or("none".to_string(), |u| u.to_string())))]
 fn process_datagrams(scid: &[u8; 16], entry: &mut ActiveConn, _session: &mut SessionState) {
     if entry.direction != Some(Direction::Ul) {
         return;
@@ -517,7 +523,7 @@ async fn flush_conn(conn: &mut quiche::Connection, socket: &UdpSocket, peer: Soc
 
 /// Non-blocking process of QUIC timeout + stats + traffic for a single
 /// connection.  Returns true if the connection should be kept alive.
-#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
+#[tracing::instrument("conn", skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = %entry.session_id.map_or("none".to_string(), |u| u.to_string())))]
 async fn process_connection_periodic(
     scid: &[u8; 16],
     entry: &mut ActiveConn,
@@ -783,13 +789,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if !delivered {
-                    tracing::info!(?peer, "no existing connection, accepting");
                     let mut cid_bytes = [0u8; 16];
                     if let Err(e) = getrandom::fill(&mut cid_bytes) {
                         tracing::error!(?e, "failed to generate server connection id");
                         continue;
                     }
                     let scid = ConnectionId::from_ref(&cid_bytes);
+                    let span = tracing::info_span!("conn", scid = ?scid, sid = "none");
+                    let _guard = span.enter();
+
+                    tracing::info!(?peer, "no existing connection, accepting");
                     match quiche::accept(&scid, None, local_addr, peer, &mut quic_cfg) {
                         Ok(mut conn) => {
                             // Feed the initial CHLO packet
@@ -826,7 +835,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tracing::info!(?peer, "new connection");
                         }
                         Err(e) => {
-                            tracing::info!(?e, "accept failed (may be retransmit)");
+                            tracing::warn!(?e, "accept failed (may be retransmit)");
                         }
                     }
                 }
