@@ -316,21 +316,33 @@ impl SessionState {
     }
 
     pub fn write_telemetry(&mut self, tel: &ClientTelemetry) {
-        let line = match serde_json::to_string(&WireMessage::ClientTelemetry(tel.clone())) {
+        self.append_wire_message(&WireMessage::ClientTelemetry(tel.clone()));
+    }
+
+    pub fn write_handshake(&mut self, h: &Handshake) {
+        self.append_wire_message(&WireMessage::Handshake(h.clone()));
+    }
+
+    pub fn write_server_stats(&mut self, stats: &ServerStats) {
+        self.append_wire_message(&WireMessage::ServerStats(stats.clone()));
+    }
+
+    fn append_wire_message(&mut self, msg: &WireMessage) {
+        let line = match serde_json::to_string(msg) {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!(?e, "failed to serialize telemetry");
+                tracing::error!(?e, "failed to serialize message");
                 return;
             }
         };
 
         if let Err(e) = writeln!(self.jsonl_file, "{line}") {
-            tracing::error!(?e, "failed to append telemetry JSONL line");
+            tracing::error!(?e, "failed to append JSONL line");
             return;
         }
 
         if let Err(e) = self.jsonl_file.sync_all() {
-            tracing::error!(?e, "failed to sync telemetry JSONL file");
+            tracing::error!(?e, "failed to sync JSONL file");
         }
     }
 

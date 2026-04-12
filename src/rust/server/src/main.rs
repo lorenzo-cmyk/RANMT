@@ -144,7 +144,7 @@ fn validate_handshake(h: &Handshake) -> Option<String> {
 }
 
 fn send_handshake_ack(conn: &mut quiche::Connection, status: HandshakeStatus, message: &str) {
-    tracing::debug!(?status, %message, "sending handshake ack");
+    tracing::info!(?status, %message, "sending handshake ack");
     let ack = WireMessage::HandshakeAck(HandshakeAck {
         status,
         message: message.to_string(),
@@ -163,7 +163,7 @@ fn send_handshake_ack(conn: &mut quiche::Connection, status: HandshakeStatus, me
 }
 
 fn close_stream_0(conn: &mut quiche::Connection) {
-    tracing::debug!("closing stream 0");
+    tracing::info!("closing stream 0");
     let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Read, 0);
     let _ = conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Write, 0);
 }
@@ -257,7 +257,7 @@ fn log_measurement_state(
             let rttvar_ms = stats.map(|s| s.rttvar_ms);
             let lost_packets = stats.map(|s| s.lost_packets);
 
-            tracing::debug!(
+            tracing::info!(
                 session_id = ?sid,
                 state,
                 direction = ?sess.direction,
@@ -274,7 +274,7 @@ fn log_measurement_state(
                 "measurement detail"
             );
         } else {
-            tracing::debug!(
+            tracing::info!(
                 session_id = ?sid,
                 state,
                 direction = ?sess.direction,
@@ -297,7 +297,9 @@ fn log_measurement_state(
 // Stream 0 processing helpers
 // ─────────────────────────────────────
 
+#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
 fn process_stream_messages(
+    scid: &[u8; 16],
     entry: &mut ActiveConn,
     sessions: &mut HashMap<uuid::Uuid, SessionState>,
     output_dir: &Path,
@@ -307,7 +309,7 @@ fn process_stream_messages(
     loop {
         match entry.conn.stream_recv(stream_id, &mut tmp) {
             Ok((n, _fin)) if n > 0 => {
-                tracing::trace!(bytes = n, "stream 0 bytes received");
+                tracing::info!(bytes = n, "stream 0 bytes received");
                 entry.rx_buf.extend_from_slice(&tmp[..n]);
                 entry.last_stream_at = Some(Instant::now());
             }
@@ -324,7 +326,7 @@ fn process_stream_messages(
         let complete = entry.rx_buf.drain(..=pos).collect::<Vec<u8>>();
         let text = String::from_utf8_lossy(&complete);
         for line in text.split('\n').filter(|s| !s.is_empty()) {
-            tracing::trace!(line = %line, "stream 0 line");
+            tracing::info!(line = %line, "stream 0 line");
             match serde_json::from_str::<WireMessage>(line) {
                 Ok(WireMessage::Handshake(h)) => {
                     tracing::info!(
@@ -399,6 +401,8 @@ fn process_stream_messages(
                             }
                         };
                         sess.client_version = h.client_version.clone();
+                        // Record the handshake in the session's JSONL
+                        sess.write_handshake(&h);
                         sessions.insert(h.session_id, sess);
                     }
 
@@ -452,7 +456,7 @@ fn process_stream_messages(
                     if let Some(sid) = entry.session_id
                         && let Some(sess) = sessions.get_mut(&sid)
                     {
-                        tracing::trace!(session_id = ?sid, timestamp = tel.timestamp_ms, "telemetry received");
+                        tracing::info!(session_id = ?sid, timestamp = tel.timestamp_ms, "telemetry received");
                         sess.write_telemetry(&tel);
                     }
                 }
@@ -465,7 +469,8 @@ fn process_stream_messages(
     }
 }
 
-fn process_datagrams(entry: &mut ActiveConn, _session: &mut SessionState) {
+#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
+fn process_datagrams(scid: &[u8; 16], entry: &mut ActiveConn, _session: &mut SessionState) {
     if entry.direction != Some(Direction::Ul) {
         return;
     }
@@ -474,14 +479,14 @@ fn process_datagrams(entry: &mut ActiveConn, _session: &mut SessionState) {
     loop {
         match entry.conn.dgram_recv(&mut dgram_buf) {
             Ok(n) if n > 0 => {
-                tracing::trace!(bytes = n, "datagram received");
+                tracing::info!(bytes = n, "datagram received");
                 entry.last_dgram_at = Some(Instant::now());
                 if n != MAX_DGRAM_SIZE {
                     tracing::warn!(size = n, "UL datagram size mismatch, skipping");
                     continue;
                 }
                 if let Some((seq_num, _send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
-                    tracing::debug!(seq = seq_num, "UL datagram received");
+                    tracing::info!(seq = seq_num, "UL datagram received");
                 }
             }
             Ok(_) | Err(quiche::Error::Done) => break,
@@ -512,9 +517,15 @@ async fn flush_conn(conn: &mut quiche::Connection, socket: &UdpSocket, peer: Soc
 
 /// Non-blocking process of QUIC timeout + stats + traffic for a single
 /// connection.  Returns true if the connection should be kept alive.
-async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket) -> bool {
+#[tracing::instrument(skip_all, fields(scid = ?quiche::ConnectionId::from_ref(scid), sid = ?entry.session_id))]
+async fn process_connection_periodic(
+    scid: &[u8; 16],
+    entry: &mut ActiveConn,
+    sessions: &mut std::collections::HashMap<uuid::Uuid, SessionState>,
+    socket: &tokio::net::UdpSocket,
+) -> bool {
     if entry.conn.is_closed() {
-        tracing::debug!("connection already closed");
+        tracing::info!("connection already closed");
         return false;
     }
 
@@ -522,26 +533,33 @@ async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket)
     if let Some(timeout) = entry.conn.timeout()
         && timeout.is_zero()
     {
-        tracing::debug!("QUIC timeout fired");
+        tracing::info!("QUIC timeout fired");
         entry.conn.on_timeout();
         if entry.conn.is_closed() {
-            tracing::debug!("connection closed after timeout");
+            tracing::info!("connection closed after timeout");
             return false;
         }
     }
 
     // Send server stats on interval
-    if entry.session_id.is_some() {
+    if let Some(session_id) = entry.session_id {
         let stats_fired = tokio::time::timeout(Duration::ZERO, entry.stats_interval.tick())
             .await
             .is_ok();
         if stats_fired {
-            tracing::trace!("sending server stats");
-            let stats = WireMessage::ServerStats(ServerStats {
+            tracing::info!("sending server stats");
+            let stats = ServerStats {
                 timestamp_ms: current_epoch_ms(),
                 quic_stats: extract_quic_stats(&entry.conn),
-            });
-            match serde_json::to_string(&stats) {
+            };
+
+            // Save stats to session JSONL
+            if let Some(sess) = sessions.get_mut(&session_id) {
+                sess.write_server_stats(&stats);
+            }
+
+            let msg = WireMessage::ServerStats(stats);
+            match serde_json::to_string(&msg) {
                 Ok(json) => {
                     let mut line = json.into_bytes();
                     line.push(b'\n');
@@ -562,12 +580,12 @@ async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket)
             .await
             .is_ok();
         if traffic_fired && entry.conn.is_established() {
-            tracing::trace!(seq = sts.next_seq, "sending DL datagram");
+            tracing::info!(seq = sts.next_seq, "sending DL datagram");
             let mut payload = [0u8; MAX_DGRAM_SIZE];
             encode_traffic_payload(sts.next_seq, current_epoch_ms(), &mut payload);
             match entry.conn.dgram_send(&payload) {
                 Ok(_) => {
-                    tracing::debug!(seq = sts.next_seq, "DL datagram sent");
+                    tracing::info!(seq = sts.next_seq, "DL datagram sent");
                     sts.next_seq += 1;
                 }
                 Err(quiche::Error::Done) => {}
@@ -605,13 +623,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port = cli.port,
         "starting RANMT server"
     );
-    tracing::debug!(output_dir = %cli.output_dir.display(), "session output directory");
+    tracing::info!(output_dir = %cli.output_dir.display(), "session output directory");
 
     // Load TLS
     let mut quic_cfg = make_quic_config()?;
     let (cert_path, key_path) = load_or_generate_cert(&cli)?;
     if let (Some(c), Some(k)) = (&cert_path, &key_path) {
-        tracing::debug!(cert = %c, key = %k, "loading TLS material");
+        tracing::info!(cert = %c, key = %k, "loading TLS material");
         load_server_tls(&mut quic_cfg, c, k)?;
     }
 
@@ -651,7 +669,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::trace!(scid = ?scid, "periodic connection sweep");
                     if !entry.conn.is_closed() {
                         let alive = process_connection_periodic(
-                            entry, &socket,
+                            scid, entry, &mut sessions, &socket,
                         ).await;
                         if !alive {
                             to_remove.push(*scid);
@@ -751,7 +769,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match entry.conn.recv(&mut udp_buf[..len], recv_info) {
                             Ok(_) | Err(quiche::Error::Done) => {}
                             Err(e) => {
-                                tracing::debug!(
+                                tracing::info!(
                                     ?e,
                                     ?peer,
                                     dcid = ?scid,
@@ -765,7 +783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if !delivered {
-                    tracing::debug!(?peer, "no existing connection, accepting");
+                    tracing::info!(?peer, "no existing connection, accepting");
                     let mut cid_bytes = [0u8; 16];
                     if let Err(e) = getrandom::fill(&mut cid_bytes) {
                         tracing::error!(?e, "failed to generate server connection id");
@@ -776,7 +794,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(mut conn) => {
                             // Feed the initial CHLO packet
                             if let Err(e) = conn.recv(&mut udp_buf[..len], recv_info) {
-                                tracing::debug!(?e, "failed to process initial client packet");
+                                tracing::info!(?e, "failed to process initial client packet");
                                 continue;
                             }
 
@@ -808,7 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tracing::info!(?peer, "new connection");
                         }
                         Err(e) => {
-                            tracing::debug!(?e, "accept failed (may be retransmit)");
+                            tracing::info!(?e, "accept failed (may be retransmit)");
                         }
                     }
                 }
@@ -818,7 +836,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (scid, entry) in active.iter_mut() {
                     tracing::trace!(scid = ?scid, "post-recv connection sweep");
                     let alive = process_connection_periodic(
-                        entry, &socket,
+                        scid, entry, &mut sessions, &socket,
                     ).await;
                     if !alive || entry.conn.is_closed() {
                         to_remove.push(*scid);
@@ -833,14 +851,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     // Process Stream 0 messages
-                    process_stream_messages(entry, &mut sessions, output_dir);
+                    process_stream_messages(scid, entry, &mut sessions, output_dir);
 
                     if let Some(sid) = entry.session_id {
                         rebinds.push((sid, *scid));
 
                         // Process UL datagrams
                         if let Some(sess) = sessions.get_mut(&sid) {
-                            process_datagrams(entry, sess);
+                            process_datagrams(scid, entry, sess);
                         }
                     }
 

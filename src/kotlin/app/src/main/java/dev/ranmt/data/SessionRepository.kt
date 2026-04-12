@@ -20,11 +20,15 @@ class SessionRepository(private val context: Context) {
 
         detailFile.readLines().forEach { line ->
             if (line.isBlank()) return@forEach
-            val json = JSONObject(line)
-            when (json.optString("type")) {
-                "summary" -> summary = summaryFromJson(json.getJSONObject("payload"))
-                "metrics" -> metrics = metricsFromJson(json.getJSONObject("payload"))
-                "telemetry" -> telemetry.add(telemetryFromJson(json.getJSONObject("payload")))
+            try {
+                val json = JSONObject(line)
+                when (json.optString("type")) {
+                    "summary" -> summary = summaryFromJson(json.optJSONObject("payload") ?: json)
+                    "metrics" -> metrics = metricsFromJson(json.optJSONObject("payload") ?: json)
+                    "telemetry" -> telemetry.add(telemetryFromJson(json.optJSONObject("payload") ?: json))
+                }
+            } catch (e: Exception) {
+                // ignore malformed lines
             }
         }
 
@@ -98,18 +102,23 @@ class SessionRepository(private val context: Context) {
 
         detailFile.readLines().forEach { line ->
             if (line.isBlank()) return@forEach
-            val json = JSONObject(line)
-            if (json.optString("type") != "telemetry") return@forEach
-            val point = telemetryFromJson(json.getJSONObject("payload"))
-            count += 1
-            sumRsrp += point.rsrp
-            maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
-            minRsrp = minRsrp.coerceAtMost(point.rsrp)
-            totalRttvar += point.rttvarMs
-            totalLossPct += point.lossPct
-            if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
-            if (primaryRat == null && point.networkType.isNotBlank()) {
-                primaryRat = point.networkType
+            try {
+                val outer = JSONObject(line)
+                if (outer.optString("type") != "telemetry") return@forEach
+                val payload = outer.optJSONObject("payload") ?: outer
+                val point = telemetryFromJson(payload)
+                count += 1
+                sumRsrp += point.rsrp
+                maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
+                minRsrp = minRsrp.coerceAtMost(point.rsrp)
+                totalRttvar += point.rttvarMs
+                totalLossPct += point.lossPct
+                if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
+                if (primaryRat == null && point.networkType.isNotBlank()) {
+                    primaryRat = point.networkType
+                }
+            } catch (e: Exception) {
+                // ignore malformed lines
             }
         }
 
@@ -333,18 +342,20 @@ class SessionRepository(private val context: Context) {
     }
 
     private fun telemetryFromJson(json: JSONObject): TelemetryPoint {
+        val timestamp = if (json.has("timestamp")) json.getLong("timestamp") else json.optLong("timestamp_ms", 0L)
+        val speedMps = if (json.has("speedMps")) json.getDouble("speedMps") else json.optDouble("speed", 0.0)
         return TelemetryPoint(
-            timestamp = json.getLong("timestamp"),
-            lat = json.getDouble("lat"),
-            lon = json.getDouble("lon"),
-            speedMps = json.optDouble("speedMps", 0.0),
-            rsrp = json.optInt("rsrp", 0),
-            rsrq = json.optInt("rsrq", 0),
-            sinr = json.optInt("sinr", 0),
-            cellId = json.optString("cellId", ""),
+            timestamp = timestamp,
+            lat = json.optDouble("lat", 0.0),
+            lon = json.optDouble("lon", 0.0),
+            speedMps = speedMps,
+            rsrp = json.optDouble("rsrp", 0.0).toInt(),
+            rsrq = json.optDouble("rsrq", 0.0).toInt(),
+            sinr = json.optDouble("sinr", 0.0).toInt(),
+            cellId = json.optString("cellId", json.optString("cell_id", "")),
             pci = json.optInt("pci", 0),
             earfcn = json.optInt("earfcn", 0),
-            networkType = json.optString("networkType", "Unknown"),
+            networkType = json.optString("networkType", json.optString("network_type", "Unknown")),
             rttvarMs = json.optDouble("rttvarMs", 0.0),
             lossPct = json.optDouble("lossPct", 0.0)
         )

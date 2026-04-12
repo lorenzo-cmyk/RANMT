@@ -26,6 +26,7 @@ impl From<FfiDirection> for Direction {
 pub struct FfiClientConfig {
     pub server_addr: String,
     pub server_fqdn: Option<String>,
+    pub session_id: Option<String>,
     pub port: u16,
     pub direction: FfiDirection,
     pub bitrate_bps: u32,
@@ -83,6 +84,7 @@ impl From<FfiClientConfig> for ClientConfig {
         Self {
             server_addr: value.server_addr,
             server_fqdn: value.server_fqdn,
+            session_id: value.session_id,
             port: value.port,
             direction: value.direction.into(),
             bitrate_bps: value.bitrate_bps,
@@ -101,6 +103,45 @@ pub enum ClientError {
     Runtime(String),
 }
 
+#[derive(uniffi::Record, Debug, Clone)]
+pub struct FfiClientTelemetry {
+    pub lat: f64,
+    pub lon: f64,
+    pub speed_mps: f64,
+    pub rsrp: i32,
+    pub rsrq: i32,
+    pub sinr: i32,
+    pub network_type: String,
+    pub cell_id: String,
+    pub pci: i32,
+    pub earfcn: i32,
+}
+
+impl From<FfiClientTelemetry> for ranmt_shared::ClientTelemetry {
+    fn from(value: FfiClientTelemetry) -> Self {
+        Self {
+            seq_num: 0, // overridden by client loop
+            timestamp_ms: ranmt_shared::current_epoch_ms(), // typically generated near send
+            lat: value.lat,
+            lon: value.lon,
+            speed: value.speed_mps,
+            network_type: match value.network_type.to_lowercase().as_str() {
+                "5g" => ranmt_shared::NetworkType::FiveG,
+                "lte" => ranmt_shared::NetworkType::Lte,
+                "3g" => ranmt_shared::NetworkType::ThreeG,
+                "2g" => ranmt_shared::NetworkType::TwoG,
+                _ => ranmt_shared::NetworkType::Unknown,
+            },
+            cell_id: value.cell_id.parse().unwrap_or(0),
+            pci: value.pci as u16,
+            earfcn: value.earfcn as u32,
+            rsrp: value.rsrp as f64,
+            rsrq: value.rsrq as f64,
+            sinr: value.sinr as f64,
+        }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct ClientHandle {
     inner: Arc<HandleInner>,
@@ -110,6 +151,7 @@ struct HandleInner {
     cancel: CancellationToken,
     task: Mutex<Option<tokio::task::JoinHandle<Result<(), String>>>>,
     snapshot: Arc<Mutex<ClientSnapshot>>,
+    telemetry_tx: tokio::sync::mpsc::UnboundedSender<ranmt_shared::ClientTelemetry>,
     #[allow(dead_code)] // Keeping `runtime` alive ensures background workers function properly
     runtime: Arc<Runtime>,
 }
@@ -119,6 +161,7 @@ impl ClientHandle {
         task: tokio::task::JoinHandle<Result<(), String>>,
         cancel: CancellationToken,
         snapshot: Arc<Mutex<ClientSnapshot>>,
+        telemetry_tx: tokio::sync::mpsc::UnboundedSender<ranmt_shared::ClientTelemetry>,
         runtime: Arc<Runtime>,
     ) -> Self {
         Self {
@@ -126,6 +169,7 @@ impl ClientHandle {
                 cancel,
                 task: Mutex::new(Some(task)),
                 snapshot,
+                telemetry_tx,
                 runtime,
             }),
         }
@@ -152,13 +196,20 @@ pub async fn start_client(config: FfiClientConfig) -> Result<ClientHandle, Clien
         last_stats: None,
     }));
     let snapshot_task = Arc::clone(&snapshot);
+    let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::unbounded_channel();
+
     let task = runtime.spawn(async move {
-        run_client_with_state(config, cancel_task, Some(snapshot_task))
+        run_client_with_state(config, cancel_task, Some(snapshot_task), Some(telemetry_rx))
             .await
             .map_err(|err| err.to_string())
     });
 
-    Ok(ClientHandle::new(task, cancel, snapshot, runtime))
+    Ok(ClientHandle::new(task, cancel, snapshot, telemetry_tx, runtime))
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn send_telemetry(handle: &ClientHandle, telemetry: FfiClientTelemetry) {
+    let _ = handle.inner.telemetry_tx.send(telemetry.into());
 }
 
 #[uniffi::export(async_runtime = "tokio")]

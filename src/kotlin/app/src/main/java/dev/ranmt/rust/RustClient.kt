@@ -5,12 +5,14 @@ import dev.ranmt.data.MeasurementConfig
 import dev.ranmt.data.TransportStats
 import uniffi.ranmt_client.ClientHandle
 import uniffi.ranmt_client.FfiClientConfig
+import uniffi.ranmt_client.FfiClientTelemetry
 import uniffi.ranmt_client.FfiConnectionState
 import uniffi.ranmt_client.FfiDirection
 import uniffi.ranmt_client.FfiStatsSnapshot
 import uniffi.ranmt_client.getStats as ffiGetStats
 import uniffi.ranmt_client.startClient as ffiStartClient
 import uniffi.ranmt_client.stopClient as ffiStopClient
+import uniffi.ranmt_client.sendTelemetry as ffiSendTelemetry
 
 private const val TAG = "RustClient"
 
@@ -35,7 +37,7 @@ object RustClient {
         return ensureLoaded()
     }
 
-    suspend fun start(config: MeasurementConfig): RustClientHandle? {
+    suspend fun start(config: MeasurementConfig, sessionId: String?): RustClientHandle? {
         if (!ensureLoaded()) {
             Log.e(TAG, "Rust library not loaded")
             return null
@@ -49,6 +51,7 @@ object RustClient {
         val ffiConfig = FfiClientConfig(
             serverAddr = host,
             serverFqdn = null,
+            sessionId = sessionId,
             port = port,
             direction = if (config.direction == "Downlink") FfiDirection.DL else FfiDirection.UL,
             bitrateBps = config.bitrateBps.toUInt(),
@@ -81,6 +84,27 @@ object RustClient {
         } catch (err: Exception) {
             Log.w(TAG, "Failed to fetch Rust stats", err)
             null
+        }
+    }
+
+    suspend fun pushTelemetry(handle: RustClientHandle, point: dev.ranmt.data.TelemetryPoint) {
+        if (!loaded) return
+        try {
+            val ffiPoint = FfiClientTelemetry(
+                lat = point.lat,
+                lon = point.lon,
+                speedMps = point.speedMps,
+                rsrp = point.rsrp,
+                rsrq = point.rsrq,
+                sinr = point.sinr,
+                networkType = point.networkType,
+                cellId = point.cellId,
+                pci = point.pci,
+                earfcn = point.earfcn
+            )
+            ffiSendTelemetry(handle, ffiPoint)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to push telemetry", e)
         }
     }
 

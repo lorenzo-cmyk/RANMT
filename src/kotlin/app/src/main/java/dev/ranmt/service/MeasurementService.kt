@@ -120,7 +120,7 @@ class MeasurementService : Service() {
         RunningSessionState.start(id, resumed = false)
         updateConnectionState()
         startElapsedTimer()
-        startRustClient(config)
+        startRustClient(config, id)
         startLocationUpdates()
     }
 
@@ -141,7 +141,7 @@ class MeasurementService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         updateConnectionState()
         startElapsedTimer()
-        startRustClient(active.config)
+        startRustClient(active.config, active.sessionId)
         startLocationUpdates()
     }
 
@@ -278,6 +278,9 @@ class MeasurementService : Service() {
                     )
                     scope.launch(Dispatchers.IO) {
                         repository.appendTelemetry(id, point)
+                        rustHandle?.let {
+                            dev.ranmt.rust.RustClient.pushTelemetry(it, point)
+                        }
                     }
                     RunningSessionState.pushTelemetry(point)
                     metrics.update(point)
@@ -311,11 +314,11 @@ class MeasurementService : Service() {
         RunningSessionState.updateConnection(state)
     }
 
-    private fun startRustClient(config: MeasurementConfig) {
+    private fun startRustClient(config: MeasurementConfig, sessionId: String?) {
         stopRustClient()
         rustStartJob?.cancel()
         rustStartJob = scope.launch(Dispatchers.IO) {
-            val handle = RustClient.start(config) ?: return@launch
+            val handle = RustClient.start(config, sessionId) ?: return@launch
             rustHandle = handle
             startRustPolling(handle)
         }

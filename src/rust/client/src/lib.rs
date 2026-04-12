@@ -22,6 +22,7 @@ mod ffi;
 pub struct ClientConfig {
     pub server_addr: String,
     pub server_fqdn: Option<String>,
+    pub session_id: Option<String>,
     pub port: u16,
     pub direction: Direction,
     pub bitrate_bps: u32,
@@ -229,13 +230,14 @@ pub async fn run_client_with_cancel(
     config: ClientConfig,
     cancel: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    run_client_with_state(config, cancel, None).await
+    run_client_with_state(config, cancel, None, None).await
 }
 
 pub async fn run_client_with_state(
     config: ClientConfig,
     cancel: CancellationToken,
     state: Option<Arc<Mutex<ClientSnapshot>>>,
+    mut telemetry_rx: Option<tokio::sync::mpsc::UnboundedReceiver<ranmt_shared::ClientTelemetry>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(shared) = &state {
         let mut snapshot = shared.lock().await;
@@ -245,7 +247,12 @@ pub async fn run_client_with_state(
         };
     }
 
-    let session_id = uuid::Uuid::new_v4();
+    let session_id = config
+        .session_id
+        .as_ref()
+        .and_then(|id| core::str::FromStr::from_str(id).ok())
+        .unwrap_or_else(|| uuid::Uuid::new_v4());
+
     tracing::info!(session_id = %session_id, "starting RANMT client");
 
     let peer_addr = resolve_ipv4(&config.server_addr, config.port)?;
@@ -364,8 +371,18 @@ pub async fn run_client_with_state(
                 }
 
                 // Telemetry generation must continue even during silent links.
-                _ = telemetry_interval.tick() => {
-                    let tel = mock_gen.generate();
+                tel_opt = async {
+                    if let Some(rx) = telemetry_rx.as_mut() {
+                        match rx.recv().await { Some(t) => Some(t), None => std::future::pending().await }
+                    } else {
+                        telemetry_interval.tick().await;
+                        Some(mock_gen.generate())
+                    }
+                } => {
+                    let Some(mut tel) = tel_opt else { continue; };
+                    tel.seq_num = telemetry_seq;
+                    telemetry_seq += 1;
+
                     let Some(json) = serialize_message(
                         &WireMessage::ClientTelemetry(tel)
                     ) else {
@@ -524,8 +541,17 @@ pub async fn run_client_with_state(
                     return Ok(());
                 }
                 _ = tokio::time::sleep_until(reconnect_deadline) => break,
-                _ = telemetry_interval.tick() => {
-                    let tel = mock_gen.generate();
+                tel_opt = async {
+                    if let Some(rx) = telemetry_rx.as_mut() {
+                        match rx.recv().await { Some(t) => Some(t), None => std::future::pending().await }
+                    } else {
+                        telemetry_interval.tick().await;
+                        Some(mock_gen.generate())
+                    }
+                } => {
+                    let Some(mut tel) = tel_opt else { continue; };
+                    tel.seq_num = telemetry_seq;
+                    telemetry_seq += 1;
                     if let Some(json) = serialize_message(
                         &WireMessage::ClientTelemetry(tel)
                     ) {
@@ -536,7 +562,7 @@ pub async fn run_client_with_state(
         }
 
         // Persist state across reconnects (spec §8.2 rule 4: never reset seq_nums)
-        telemetry_seq = mock_gen.seq_num;
+        mock_gen.seq_num = telemetry_seq;
         datagram_seq = pacer.next_seq();
     }
 }
