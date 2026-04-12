@@ -83,6 +83,7 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_idle_timeout(IDLE_TIMEOUT_MS);
+    config.set_max_ack_delay(5); // Reduced to 5ms to prevent RTT inflation/jitter
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -166,8 +167,8 @@ fn display_stats(stats: &ServerStats) {
     tracing::info!(
         "RTT={:.1}ms | TX={}B | RX={}B | CWND={}B | Lost={} | Rate={}bps",
         stats.quic_stats.rtt_ms,
-        stats.quic_stats.tx_bytes,
-        stats.quic_stats.rx_bytes,
+        stats.quic_stats.rx_bytes, // Client TX is Server RX
+        stats.quic_stats.tx_bytes, // Client RX is Server TX
         stats.quic_stats.cwnd,
         stats.quic_stats.lost_packets,
         stats.quic_stats.send_rate_bps,

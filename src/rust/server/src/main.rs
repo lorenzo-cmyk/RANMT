@@ -69,6 +69,7 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_idle_timeout(IDLE_TIMEOUT_MS);
+    config.set_max_ack_delay(5); // Reduced to 5ms to prevent RTT inflation/jitter
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -517,7 +518,7 @@ async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket)
 
     // Process QUIC timeout
     if let Some(timeout) = entry.conn.timeout()
-        && (timeout.is_zero() || timeout <= Duration::from_millis(5)) {
+        && timeout.is_zero() {
             tracing::debug!("QUIC timeout fired");
             entry.conn.on_timeout();
             if entry.conn.is_closed() {

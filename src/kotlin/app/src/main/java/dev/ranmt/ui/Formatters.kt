@@ -15,11 +15,12 @@ fun formatDuration(seconds: Int): String {
 }
 
 fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
     val kb = bytes / 1024.0
     val mb = kb / 1024.0
     return if (mb >= 1.0) String.format(Locale.US, "%.1f MB", mb) else String.format(
         Locale.US,
-        "%.0f KB",
+        "%.1f kB",
         kb
     )
 }

@@ -105,8 +105,10 @@ object RustClient {
                 TransportStats(
                     rttMs = server.quicStats.rttMs,
                     rttvarMs = server.quicStats.rttvarMs,
-                    txBytes = server.quicStats.txBytes.toLong(),
-                    rxBytes = server.quicStats.rxBytes.toLong(),
+                    // App TX matches Server RX
+                    txBytes = server.quicStats.rxBytes.toLong(),
+                    // App RX matches Server TX
+                    rxBytes = server.quicStats.txBytes.toLong(),
                     cwnd = server.quicStats.cwnd.toLong(),
                     lostPackets = server.quicStats.lostPackets.toLong(),
                     sendRateBps = server.quicStats.sendRateBps.toLong()

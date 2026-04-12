@@ -89,9 +89,9 @@ fun RunningScreen(
         val transport = runningState.transportStats
         val rtt = transport?.rttMs?.let { String.format("%.1f", it) } ?: "--"
         val loss = transport?.lostPackets?.let { it.toString() } ?: "--"
-        val cwnd = transport?.cwnd?.toString() ?: "--"
-        val bytesTx = transport?.txBytes?.toString() ?: "--"
-        val bytesRx = transport?.rxBytes?.toString() ?: "--"
+        val cwnd = transport?.cwnd?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
+        val bytesTx = transport?.txBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
+        val bytesRx = transport?.rxBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
         val rttvar = transport?.rttvarMs?.let { String.format("%.1f", it) } ?: "--"
 
         Spacer(modifier = Modifier.height(12.dp))
