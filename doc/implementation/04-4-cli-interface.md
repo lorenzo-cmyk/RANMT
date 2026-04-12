@@ -40,6 +40,7 @@ Options:
                                  (dev mode only)
     --seed <SEED>                RNG seed for mock telemetry
                                  [default: 42]
+    --session-id <UUID>          Existing session UUID to reconnect to
     -v, --verbose                Enable debug logging
     -h, --help                   Print help
 ```

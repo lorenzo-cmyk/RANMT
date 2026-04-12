@@ -16,6 +16,8 @@ pub enum WireMessage {
     ClientTelemetry(ClientTelemetry),
     #[serde(rename = "goodbye")]
     Goodbye(Goodbye),
+    #[serde(rename = "traffic_datagram")]
+    TrafficDatagram(TrafficDatagram),
 }
 ```
 

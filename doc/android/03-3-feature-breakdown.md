@@ -31,7 +31,7 @@ When a user opens a specific past session, they are presented with a scrollable 
 *   **The "Running" State:**
     *   Upon pressing **"Start"**, the app transitions to a "Live Dashboard". 
     *   **Anti-Sleep Guarantee:** The screen brightness is locked on (Screen Wakelock) so the tester can glance at it while driving. The app will declare a native Android 15 Foreground Service for `location` and `dataSync`, pinning a persistent notification in the status bar. If the user accidentally locks the screen, the test continues flawlessly in the background without the CPU dozing off.
-    *   **Live UI:** Displays a large digital timer, visual indicators of current connection state (Connected, Buffer-Recording for Tunnels, Reconnecting), and live spark-line graphs of RSRP and RTT/Jitter.
+    *   **Live UI:** Displays a large digital timer, visual indicators of current connection state (Connected, Reconnecting), and live spark-line graphs of RSRP and RTT/Jitter.
     *   **End Test:** A bold, swipe-to-stop or long-press-to-stop button ensures the user doesn't accidentally terminate the test over a bump in the road.
 
 ### E. Settings & Configuration
