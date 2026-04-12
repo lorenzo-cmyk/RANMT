@@ -238,9 +238,7 @@ private fun OverviewPanel(detail: SessionDetail) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                MetricTile("Bytes Tx", formatBytes(detail.metrics.bytesSent))
-                MetricTile("Bytes Rx", formatBytes(detail.metrics.bytesReceived))
-                MetricTile("Drops", detail.metrics.connectionDrops.toString())
+                MetricTile("Spikes (>20%)", detail.metrics.connectionDrops.toString())
             }
         }
     }
@@ -309,9 +307,9 @@ private fun TransportPanel(detail: SessionDetail) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 MetricTile("Peak Rttvar", formatRttvar(detail.metrics.peakRttvarMs))
-                MetricTile("Lost Packets", detail.summary.lostPackets.toString())
+                MetricTile("Loss", String.format("%.2f %%", detail.summary.averageLossPct))
                 val dropTile = detail.metrics.connectionDrops.toString()
-                MetricTile("Drops", dropTile)
+                MetricTile("Spikes (>20%)", dropTile)
             }
         }
     }
@@ -382,7 +380,7 @@ private fun MapPanel(points: List<TelemetryPoint>) {
                     sampledPoints.forEach { point ->
                         Marker(
                             state = MarkerState(position = LatLng(point.lat, point.lon)),
-                            icon = BitmapDescriptorFactory.defaultMarker(lossHue(point.lostPackets)),
+                            icon = BitmapDescriptorFactory.defaultMarker(lossHue(point.lossPct)),
                             title = "Sample ${formatDateTime(point.timestamp)}",
                             snippet = formatMarkerSnippet(point)
                         )
@@ -465,7 +463,7 @@ private fun formatMarkerSnippet(point: TelemetryPoint): String {
         "RSRQ ${point.rsrq} dB",
         "SINR ${point.sinr} dB",
         "Rttvar ${formatRttvar(point.rttvarMs)}",
-        "Loss ${point.lostPackets.toString()}"
+        "Loss ${String.format("%.2f%%", point.lossPct)}"
     ).joinToString(" | ")
 }
 
@@ -486,10 +484,10 @@ private fun LegendChip(color: Color, label: String) {
     }
 }
 
-private fun lossHue(lostPackets: Long): Float {
+private fun lossHue(lossPct: Double): Float {
     return when {
-        lostPackets <= 1L -> BitmapDescriptorFactory.HUE_GREEN
-        lostPackets <= 5L -> BitmapDescriptorFactory.HUE_YELLOW
+        lossPct <= 1.0 -> BitmapDescriptorFactory.HUE_GREEN
+        lossPct <= 5.0 -> BitmapDescriptorFactory.HUE_YELLOW
         else -> BitmapDescriptorFactory.HUE_RED
     }
 }

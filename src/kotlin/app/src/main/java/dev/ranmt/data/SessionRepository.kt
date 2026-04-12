@@ -67,7 +67,7 @@ class SessionRepository(private val context: Context) {
                 startedAt = startedAt,
                 durationSec = 0,
                 averageRttvarMs = 0.0,
-                lostPackets = 0L,
+                averageLossPct = 0.0,
                 primaryRat = "Unknown"
             )
             val updated = (summaries + placeholder)
@@ -92,7 +92,7 @@ class SessionRepository(private val context: Context) {
         var minRsrp = Int.MAX_VALUE
         var sumRsrp = 0L
         var totalRttvar = 0.0
-        var totalLostPackets = 0L
+        var totalLossPct = 0.0
         var peakRttvar = 0.0
         var primaryRat: String? = null
 
@@ -106,7 +106,7 @@ class SessionRepository(private val context: Context) {
             maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
             minRsrp = minRsrp.coerceAtMost(point.rsrp)
             totalRttvar += point.rttvarMs
-            totalLostPackets += point.lostPackets
+            totalLossPct += point.lossPct
             if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
             if (primaryRat == null && point.networkType.isNotBlank()) {
                 primaryRat = point.networkType
@@ -120,7 +120,7 @@ class SessionRepository(private val context: Context) {
             minRsrp = minRsrp,
             sumRsrp = sumRsrp,
             totalRttvar = totalRttvar,
-            totalLostPackets = totalLostPackets,
+            totalLossPct = totalLossPct,
             peakRttvar = peakRttvar,
             primaryRat = primaryRat
         )
@@ -161,7 +161,7 @@ class SessionRepository(private val context: Context) {
                 "# started_at=${detail.summary.startedAt}",
                 "# duration_sec=${detail.summary.durationSec}",
                 "# avg_rttvar_ms=${String.format("%.2f", detail.summary.averageRttvarMs)}",
-                "# loss_pct=${String.format("%.2f", detail.summary.lostPackets)}",
+                "# loss_pct=${String.format("%.2f", detail.summary.averageLossPct)}",
                 "# max_rsrp=${detail.metrics.maxRsrp}",
                 "# min_rsrp=${detail.metrics.minRsrp}",
                 "# avg_rsrp=${detail.metrics.avgRsrp}",
@@ -199,7 +199,7 @@ class SessionRepository(private val context: Context) {
                 point.earfcn,
                 point.networkType,
                 String.format("%.2f", point.rttvarMs),
-                String.format("%.2f", point.lostPackets)
+                String.format("%.2f", point.lossPct)
             ).joinToString(",")
         }
         file.writeText((meta + header + rows).joinToString("\n"))
@@ -248,14 +248,14 @@ class SessionRepository(private val context: Context) {
         val duration = ((end - start) / 1000).toInt().coerceAtLeast(0)
         val avgRttvar = telemetry.map { it.rttvarMs }.average().takeIf { it.isFinite() } ?: 0.0
         val avgLoss =
-            telemetry.map { it.lostPackets }.average().takeIf { it.isFinite() }?.toLong() ?: 0L
+            telemetry.map { it.lossPct }.average().takeIf { it.isFinite() } ?: 0.0
         val rat = telemetry.firstOrNull()?.networkType ?: "Unknown"
         return SessionSummary(
             id = id,
             startedAt = start,
             durationSec = duration,
             averageRttvarMs = avgRttvar,
-            lostPackets = avgLoss,
+            averageLossPct = avgLoss,
             primaryRat = rat
         )
     }
@@ -267,9 +267,7 @@ class SessionRepository(private val context: Context) {
             maxRsrp = rsrpValues.maxOrNull() ?: 0,
             minRsrp = rsrpValues.minOrNull() ?: 0,
             avgRsrp = avgRsrp,
-            connectionDrops = telemetry.count { it.lostPackets > 5.0 },
-            bytesSent = 0,
-            bytesReceived = 0,
+            connectionDrops = telemetry.count { it.lossPct > 20.0 },
             peakRttvarMs = telemetry.maxOfOrNull { it.rttvarMs } ?: 0.0
         )
     }
@@ -280,7 +278,7 @@ class SessionRepository(private val context: Context) {
             put("startedAt", summary.startedAt)
             put("durationSec", summary.durationSec)
             put("averageRttvarMs", summary.averageRttvarMs)
-            put("lostPackets", summary.lostPackets)
+            put("averageLossPct", summary.averageLossPct)
             put("primaryRat", summary.primaryRat)
         }
     }
@@ -291,7 +289,7 @@ class SessionRepository(private val context: Context) {
             startedAt = json.getLong("startedAt"),
             durationSec = json.getInt("durationSec"),
             averageRttvarMs = json.optDouble("averageRttvarMs", 0.0),
-            lostPackets = json.optLong("lostPackets", 0L),
+            averageLossPct = json.optDouble("averageLossPct", 0.0),
             primaryRat = json.getString("primaryRat")
         )
     }
@@ -302,8 +300,6 @@ class SessionRepository(private val context: Context) {
             put("minRsrp", metrics.minRsrp)
             put("avgRsrp", metrics.avgRsrp)
             put("connectionDrops", metrics.connectionDrops)
-            put("bytesSent", metrics.bytesSent)
-            put("bytesReceived", metrics.bytesReceived)
             put("peakRttvarMs", metrics.peakRttvarMs)
         }
     }
@@ -314,8 +310,6 @@ class SessionRepository(private val context: Context) {
             minRsrp = json.getInt("minRsrp"),
             avgRsrp = json.getInt("avgRsrp"),
             connectionDrops = json.getInt("connectionDrops"),
-            bytesSent = json.getLong("bytesSent"),
-            bytesReceived = json.getLong("bytesReceived"),
             peakRttvarMs = json.getDouble("peakRttvarMs")
         )
     }
@@ -334,7 +328,7 @@ class SessionRepository(private val context: Context) {
             put("earfcn", point.earfcn)
             put("networkType", point.networkType)
             put("rttvarMs", point.rttvarMs)
-            put("lostPackets", point.lostPackets)
+            put("lossPct", point.lossPct)
         }
     }
 
@@ -352,7 +346,7 @@ class SessionRepository(private val context: Context) {
             earfcn = json.optInt("earfcn", 0),
             networkType = json.optString("networkType", "Unknown"),
             rttvarMs = json.optDouble("rttvarMs", 0.0),
-            lostPackets = json.optLong("lostPackets", 0L)
+            lossPct = json.optDouble("lossPct", 0.0)
         )
     }
 

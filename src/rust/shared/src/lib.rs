@@ -103,6 +103,8 @@ pub struct QuicStats {
     pub rttvar_ms: f64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub rx_packets: u64,
     pub cwnd: u64,
     pub lost_packets: u64,
     pub send_rate_bps: u64,

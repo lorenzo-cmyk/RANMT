@@ -88,7 +88,7 @@ fun RunningScreen(
         val timestamp = point?.timestamp?.toString() ?: "--"
         val transport = runningState.transportStats
         val rtt = transport?.rttMs?.let { String.format("%.1f", it) } ?: "--"
-        val loss = transport?.lostPackets?.let { it.toString() } ?: "--"
+        val loss = point?.lossPct?.let { String.format("%.2f %%", it) } ?: "--"
         val cwnd = transport?.cwnd?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
         val bytesTx = transport?.txBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
         val bytesRx = transport?.rxBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"

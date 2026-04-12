@@ -44,9 +44,7 @@ object SampleData {
             maxRsrp = telemetry.maxOf { it.rsrp },
             minRsrp = telemetry.minOf { it.rsrp },
             avgRsrp = avgRsrp,
-            connectionDrops = telemetry.count { it.lostPackets > 5.0 },
-            bytesSent = 12_800_000,
-            bytesReceived = 12_300_000,
+            connectionDrops = telemetry.count { it.lossPct > 20.0 },
             peakRttvarMs = telemetry.maxOf { it.rttvarMs }
         )
         val summary = SessionSummary(
@@ -54,7 +52,7 @@ object SampleData {
             startedAt = start,
             durationSec = durationSec,
             averageRttvarMs = rttvar,
-            lostPackets = loss.toLong(),
+            averageLossPct = loss,
             primaryRat = rat
         )
         return SessionDetail(summary = summary, metrics = metrics, telemetry = telemetry)
@@ -85,7 +83,7 @@ object SampleData {
                 earfcn = 6300 + index % 30,
                 networkType = "LTE",
                 rttvarMs = rttvar,
-                lostPackets = loss.toLong()
+                lossPct = loss
             )
         }
     }

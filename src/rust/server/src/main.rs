@@ -201,6 +201,8 @@ fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
         rttvar_ms,
         tx_bytes: s.sent_bytes,
         rx_bytes: s.recv_bytes,
+        tx_packets: s.sent as u64,
+        rx_packets: s.recv as u64,
         cwnd,
         lost_packets: s.lost as u64,
         send_rate_bps,
@@ -518,14 +520,15 @@ async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket)
 
     // Process QUIC timeout
     if let Some(timeout) = entry.conn.timeout()
-        && timeout.is_zero() {
-            tracing::debug!("QUIC timeout fired");
-            entry.conn.on_timeout();
-            if entry.conn.is_closed() {
-                tracing::debug!("connection closed after timeout");
-                return false;
-            }
+        && timeout.is_zero()
+    {
+        tracing::debug!("QUIC timeout fired");
+        entry.conn.on_timeout();
+        if entry.conn.is_closed() {
+            tracing::debug!("connection closed after timeout");
+            return false;
         }
+    }
 
     // Send server stats on interval
     if entry.session_id.is_some() {

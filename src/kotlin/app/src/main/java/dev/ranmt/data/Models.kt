@@ -5,7 +5,7 @@ data class SessionSummary(
     val startedAt: Long,
     val durationSec: Int,
     val averageRttvarMs: Double,
-    val lostPackets: Long,
+    val averageLossPct: Double,
     val primaryRat: String
 )
 
@@ -14,8 +14,6 @@ data class SessionMetrics(
     val minRsrp: Int,
     val avgRsrp: Int,
     val connectionDrops: Int,
-    val bytesSent: Long,
-    val bytesReceived: Long,
     val peakRttvarMs: Double
 )
 
@@ -32,7 +30,7 @@ data class TelemetryPoint(
     val earfcn: Int,
     val networkType: String = "Unknown",
     val rttvarMs: Double,
-    val lostPackets: Long
+    val lossPct: Double
 )
 
 data class TelemetryAggregate(
@@ -41,7 +39,7 @@ data class TelemetryAggregate(
     val minRsrp: Int,
     val sumRsrp: Long,
     val totalRttvar: Double,
-    val totalLostPackets: Long,
+    val totalLossPct: Double,
     val peakRttvar: Double,
     val primaryRat: String?
 )
@@ -65,8 +63,10 @@ data class TransportStats(
     val rttvarMs: Double?,
     val txBytes: Long?,
     val rxBytes: Long?,
+    val txPackets: Long?,
+    val rxPackets: Long?,
     val cwnd: Long?,
-    val lostPackets: Long?,
+    val totalLostPackets: Long?,
     val sendRateBps: Long?
 )
 
