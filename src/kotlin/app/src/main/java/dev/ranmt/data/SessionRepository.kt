@@ -25,7 +25,11 @@ class SessionRepository(private val context: Context) {
                 when (json.optString("type")) {
                     "summary" -> summary = summaryFromJson(json.optJSONObject("payload") ?: json)
                     "metrics" -> metrics = metricsFromJson(json.optJSONObject("payload") ?: json)
-                    "telemetry" -> telemetry.add(telemetryFromJson(json.optJSONObject("payload") ?: json))
+                    "telemetry" -> telemetry.add(
+                        telemetryFromJson(
+                            json.optJSONObject("payload") ?: json
+                        )
+                    )
                 }
             } catch (e: Exception) {
                 // ignore malformed lines
@@ -276,7 +280,7 @@ class SessionRepository(private val context: Context) {
             maxRsrp = rsrpValues.maxOrNull() ?: 0,
             minRsrp = rsrpValues.minOrNull() ?: 0,
             avgRsrp = avgRsrp,
-            connectionDrops = telemetry.count { it.lossPct > 20.0 },
+            lossSpikes = telemetry.count { it.lossPct > 20.0 },
             peakRttvarMs = telemetry.maxOfOrNull { it.rttvarMs } ?: 0.0
         )
     }
@@ -308,7 +312,7 @@ class SessionRepository(private val context: Context) {
             put("maxRsrp", metrics.maxRsrp)
             put("minRsrp", metrics.minRsrp)
             put("avgRsrp", metrics.avgRsrp)
-            put("connectionDrops", metrics.connectionDrops)
+            put("connectionDrops", metrics.lossSpikes)
             put("peakRttvarMs", metrics.peakRttvarMs)
         }
     }
@@ -318,7 +322,7 @@ class SessionRepository(private val context: Context) {
             maxRsrp = json.getInt("maxRsrp"),
             minRsrp = json.getInt("minRsrp"),
             avgRsrp = json.getInt("avgRsrp"),
-            connectionDrops = json.getInt("connectionDrops"),
+            lossSpikes = json.getInt("connectionDrops"),
             peakRttvarMs = json.getDouble("peakRttvarMs")
         )
     }
@@ -342,8 +346,12 @@ class SessionRepository(private val context: Context) {
     }
 
     private fun telemetryFromJson(json: JSONObject): TelemetryPoint {
-        val timestamp = if (json.has("timestamp")) json.getLong("timestamp") else json.optLong("timestamp_ms", 0L)
-        val speedMps = if (json.has("speedMps")) json.getDouble("speedMps") else json.optDouble("speed", 0.0)
+        val timestamp = if (json.has("timestamp")) json.getLong("timestamp") else json.optLong(
+            "timestamp_ms",
+            0L
+        )
+        val speedMps =
+            if (json.has("speedMps")) json.getDouble("speedMps") else json.optDouble("speed", 0.0)
         return TelemetryPoint(
             timestamp = timestamp,
             lat = json.optDouble("lat", 0.0),

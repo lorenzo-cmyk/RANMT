@@ -238,7 +238,7 @@ private fun OverviewPanel(detail: SessionDetail) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                MetricTile("Spikes (>20%)", detail.metrics.connectionDrops.toString())
+                MetricTile("Spikes (>20%)", detail.metrics.lossSpikes.toString())
             }
         }
     }
@@ -308,7 +308,7 @@ private fun TransportPanel(detail: SessionDetail) {
             ) {
                 MetricTile("Peak Rttvar", formatRttvar(detail.metrics.peakRttvarMs))
                 MetricTile("Loss", String.format("%.2f %%", detail.summary.averageLossPct))
-                val dropTile = detail.metrics.connectionDrops.toString()
+                val dropTile = detail.metrics.lossSpikes.toString()
                 MetricTile("Spikes (>20%)", dropTile)
             }
         }

@@ -13,7 +13,7 @@ data class SessionMetrics(
     val maxRsrp: Int,
     val minRsrp: Int,
     val avgRsrp: Int,
-    val connectionDrops: Int,
+    val lossSpikes: Int,
     val peakRttvarMs: Double
 )
 
@@ -72,7 +72,6 @@ data class TransportStats(
 
 enum class ConnectionState {
     Connected,
-    Buffering,
     Reconnecting
 }
 

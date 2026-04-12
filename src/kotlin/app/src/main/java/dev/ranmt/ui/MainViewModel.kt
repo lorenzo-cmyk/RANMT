@@ -9,7 +9,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ranmt.data.AppSettings
 import dev.ranmt.data.AppSettingsStore
-import dev.ranmt.data.ConnectionState
 import dev.ranmt.data.ExportDestination
 import dev.ranmt.data.ExportFormat
 import dev.ranmt.data.MeasurementConfig
@@ -42,9 +41,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             insecure = false
         )
     )
-        private set
-
-    var connectionState by mutableStateOf(ConnectionState.Connected)
         private set
 
     var isRunning by mutableStateOf(false)
@@ -109,7 +105,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startMeasurement() {
         isRunning = true
         hasActiveSession = true
-        connectionState = ConnectionState.Connected
         activeSessionId = sessionPrefs.loadActive()?.sessionId
         val intent = MeasurementService.startIntent(getApplication(), config)
         getApplication<Application>().startForegroundService(intent)
@@ -127,10 +122,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             delay(750)
             refreshSessions()
         }
-    }
-
-    fun updateConnectionState(state: ConnectionState) {
-        connectionState = state
     }
 
     fun exportSession(id: String, format: ExportFormat) = when (format) {

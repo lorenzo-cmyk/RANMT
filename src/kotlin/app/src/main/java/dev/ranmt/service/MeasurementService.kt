@@ -66,6 +66,7 @@ class MeasurementService : Service() {
     private var kalmanFilter: GpsKalmanFilter? = null
     private var lastTotalLost: Long = 0L
     private var lastTotalSent: Long = 0L
+    private var testDirection: String = "Uplink"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -112,6 +113,7 @@ class MeasurementService : Service() {
         metrics = MetricsAccumulator()
         lastTotalLost = 0L
         lastTotalSent = 0L
+        testDirection = config.direction
 
         val id = sessionId ?: return
         sessionPrefs.saveActive(id, startedAt, config)
@@ -135,7 +137,7 @@ class MeasurementService : Service() {
         repository.aggregateTelemetry(active.sessionId)?.let { agg ->
             metrics.applyAggregate(agg)
         }
-        metrics.connectionDrops = active.connectionDrops + 1
+        metrics.lossSpikes = active.lossSpikes + 1
         repository.startSession(active.sessionId, active.startedAt, active.config)
         RunningSessionState.start(active.sessionId, resumed = true)
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -151,7 +153,7 @@ class MeasurementService : Service() {
         stopRustClient()
         elapsedJob?.cancel()
 
-        sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
+        sessionPrefs.saveLossSpikes(metrics.lossSpikes)
 
         val endTime = System.currentTimeMillis()
         val summary = metrics.toSummary(id, startedAt, endTime)
@@ -239,7 +241,10 @@ class MeasurementService : Service() {
                     val finalLon = filtered?.longitude ?: location.longitude
 
                     val currentTotalLost = transport?.totalLostPackets ?: 0L
-                    val currentTotalSent = transport?.rxPackets ?: 0L
+                    val currentTotalSent = if (testDirection == "Uplink")
+                        transport?.txPackets ?: 0L
+                    else
+                        transport?.rxPackets ?: 0L
 
                     val lostDelta = if (currentTotalLost >= lastTotalLost) {
                         currentTotalLost - lastTotalLost
@@ -316,9 +321,12 @@ class MeasurementService : Service() {
 
     private fun startRustClient(config: MeasurementConfig, sessionId: String?) {
         stopRustClient()
-        rustStartJob?.cancel()
         rustStartJob = scope.launch(Dispatchers.IO) {
             val handle = RustClient.start(config, sessionId) ?: return@launch
+            if (!isActive) {
+                RustClient.stop(handle)
+                return@launch
+            }
             rustHandle = handle
             startRustPolling(handle)
         }
@@ -332,7 +340,7 @@ class MeasurementService : Service() {
                 if (snapshot != null) {
                     lastTransportStats = snapshot.transport
                     snapshot.transport?.let { metrics.updateTransport(it) }
-                    sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
+                    sessionPrefs.saveLossSpikes(metrics.lossSpikes)
                     RunningSessionState.updateTransport(snapshot.transport)
                     RunningSessionState.updateConnection(mapConnectionState(snapshot.state))
                 }
@@ -346,14 +354,15 @@ class MeasurementService : Service() {
         rustStartJob = null
         rustPollingJob?.cancel()
         rustPollingJob = null
-        rustHandle?.let { handle ->
+        val handle = rustHandle
+        rustHandle = null
+        lastTransportStats = null
+        RunningSessionState.updateTransport(null)
+        if (handle != null) {
             scope.launch(Dispatchers.IO) {
                 RustClient.stop(handle)
             }
         }
-        rustHandle = null
-        lastTransportStats = null
-        RunningSessionState.updateTransport(null)
     }
 
     private fun mapConnectionState(state: RustConnectionState): ConnectionState {
@@ -363,20 +372,6 @@ class MeasurementService : Service() {
             RustConnectionState.Reconnecting -> ConnectionState.Reconnecting
             RustConnectionState.Disconnected -> ConnectionState.Reconnecting
         }
-    }
-
-    private fun normalizeServer(config: MeasurementConfig): Pair<String, Int> {
-        val raw = config.serverIp.trim()
-        val idx = raw.lastIndexOf(':')
-        if (idx > 0 && idx == raw.indexOf(':')) {
-            val host = raw.substring(0, idx).trim()
-            val portText = raw.substring(idx + 1).trim()
-            val port = portText.toIntOrNull()
-            if (host.isNotBlank() && port != null && port in 1..65535) {
-                return host to port
-            }
-        }
-        return raw to config.serverPort
     }
 
     private fun bindWifiNetwork() {
@@ -580,16 +575,26 @@ class MeasurementService : Service() {
     }
 
     private class MetricsAccumulator {
+        @Volatile
         var maxRsrp: Int = Int.MIN_VALUE
+        @Volatile
         var minRsrp: Int = Int.MAX_VALUE
+        @Volatile
         var sumRsrp: Long = 0
+        @Volatile
         var count: Int = 0
-        var connectionDrops: Int = 0
+        @Volatile
+        var lossSpikes: Int = 0
+        @Volatile
         var peakRttvar: Double = 0.0
+        @Volatile
         var totalRttvar: Double = 0.0
+        @Volatile
         var totalLossPct: Double = 0.0
+        @Volatile
         var primaryRat: String? = null
 
+        @Synchronized
         fun update(point: TelemetryPoint) {
             count += 1
             sumRsrp += point.rsrp
@@ -597,20 +602,28 @@ class MeasurementService : Service() {
             minRsrp = minRsrp.coerceAtMost(point.rsrp)
             totalRttvar += point.rttvarMs
             totalLossPct += point.lossPct
+            if (point.lossPct > 20.0) lossSpikes++
             if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
             if (primaryRat == null && point.networkType.isNotBlank()) primaryRat = point.networkType
         }
 
+        @Synchronized
         fun updateTransport(stats: TransportStats) {
             stats.rttvarMs?.let { rttvar ->
                 if (rttvar > peakRttvar) peakRttvar = rttvar
             }
         }
 
+        @Synchronized
         fun avgRsrp(): Int = if (count == 0) 0 else (sumRsrp / count).toInt()
+
+        @Synchronized
         fun avgRttvar(): Double = if (count == 0) 0.0 else totalRttvar / count
+
+        @Synchronized
         fun avgLoss(): Double = if (count == 0) 0.0 else totalLossPct / count
 
+        @Synchronized
         fun applyAggregate(agg: TelemetryAggregate) {
             count = agg.count
             maxRsrp = agg.maxRsrp
@@ -622,6 +635,7 @@ class MeasurementService : Service() {
             primaryRat = agg.primaryRat
         }
 
+        @Synchronized
         fun toSummary(id: String, startedAt: Long, endTime: Long): SessionSummary {
             val durationSec = ((endTime - startedAt) / 1000).toInt().coerceAtLeast(0)
             return SessionSummary(
@@ -634,6 +648,7 @@ class MeasurementService : Service() {
             )
         }
 
+        @Synchronized
         fun toMetrics(): SessionMetrics {
             val safeMax = if (count == 0) 0 else maxRsrp
             val safeMin = if (count == 0) 0 else minRsrp
@@ -641,7 +656,7 @@ class MeasurementService : Service() {
                 maxRsrp = safeMax,
                 minRsrp = safeMin,
                 avgRsrp = avgRsrp(),
-                connectionDrops = connectionDrops,
+                lossSpikes = lossSpikes,
                 peakRttvarMs = peakRttvar
             )
         }

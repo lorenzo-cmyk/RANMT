@@ -44,7 +44,7 @@ object SampleData {
             maxRsrp = telemetry.maxOf { it.rsrp },
             minRsrp = telemetry.minOf { it.rsrp },
             avgRsrp = avgRsrp,
-            connectionDrops = telemetry.count { it.lossPct > 20.0 },
+            lossSpikes = telemetry.count { it.lossPct > 20.0 },
             peakRttvarMs = telemetry.maxOf { it.rttvarMs }
         )
         val summary = SessionSummary(

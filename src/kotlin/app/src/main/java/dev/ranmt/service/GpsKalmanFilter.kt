@@ -258,14 +258,23 @@ class GpsKalmanFilter(
         val k3 = (P[3][2] * hx + P[3][3] * hy) / s
 
         val innov = dopplerSpeed - currentSpeed
-        vx += k2 * innov * hx
-        vy += k3 * innov * hy
+        vx += k2 * innov
+        vy += k3 * innov
 
         // Covariance update for velocity rows only
-        P[2][2] -= k2 * (P[2][2] * hx + P[2][3] * hy)
-        P[2][3] -= k2 * (P[3][2] * hx + P[3][3] * hy)
-        P[3][2] -= k3 * (P[2][2] * hx + P[2][3] * hy)
-        P[3][3] -= k3 * (P[3][2] * hx + P[3][3] * hy)
+        // Cache original values before in-place modification
+        val p22 = P[2][2];
+        val p23 = P[2][3]
+        val p32 = P[3][2];
+        val p33 = P[3][3]
+
+        val hp2 = p22 * hx + p32 * hy
+        val hp3 = p23 * hx + p33 * hy
+
+        P[2][2] -= k2 * hp2
+        P[2][3] -= k2 * hp3
+        P[3][2] -= k3 * hp2
+        P[3][3] -= k3 * hp3
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

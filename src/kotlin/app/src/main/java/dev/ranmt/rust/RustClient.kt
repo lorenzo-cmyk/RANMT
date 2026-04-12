@@ -10,9 +10,9 @@ import uniffi.ranmt_client.FfiConnectionState
 import uniffi.ranmt_client.FfiDirection
 import uniffi.ranmt_client.FfiStatsSnapshot
 import uniffi.ranmt_client.getStats as ffiGetStats
+import uniffi.ranmt_client.sendTelemetry as ffiSendTelemetry
 import uniffi.ranmt_client.startClient as ffiStartClient
 import uniffi.ranmt_client.stopClient as ffiStopClient
-import uniffi.ranmt_client.sendTelemetry as ffiSendTelemetry
 
 private const val TAG = "RustClient"
 

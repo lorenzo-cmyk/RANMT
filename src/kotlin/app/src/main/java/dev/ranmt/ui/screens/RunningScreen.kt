@@ -137,7 +137,7 @@ fun RunningScreen(
             subtitle = "QUIC statistics.",
             entries = listOf(
                 "RTT" to "$rtt ms",
-                "Lost Packets" to loss,
+                "Packet Loss" to loss,
                 "CWND" to cwnd,
                 "Rttvar" to "$rttvar ms",
                 "Bytes TX" to bytesTx,
@@ -202,7 +202,6 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
     val stateColor by animateColorAsState(
         targetValue = when (state) {
             ConnectionState.Connected -> Color(0xFF2FB7A3)
-            ConnectionState.Buffering -> Color(0xFFF6B64B)
             ConnectionState.Reconnecting -> Color(0xFFE76D5A)
         },
         label = "state-color"
@@ -229,7 +228,6 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
                 Text(
                     text = when (state) {
                         ConnectionState.Connected -> "Connected"
-                        ConnectionState.Buffering -> "Buffering for tunnel"
                         ConnectionState.Reconnecting -> "Reconnecting"
                     },
                     style = MaterialTheme.typography.bodyMedium,
