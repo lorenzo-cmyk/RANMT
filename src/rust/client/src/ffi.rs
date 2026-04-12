@@ -5,9 +5,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    ClientConfig, ClientConnectionState, ClientSnapshot, LossJitterSource, run_client_with_state,
-};
+use crate::{ClientConfig, ClientConnectionState, ClientSnapshot, run_client_with_state};
 
 #[derive(uniffi::Enum, Debug, Clone, Copy)]
 pub enum FfiDirection {
@@ -58,6 +56,7 @@ impl From<ClientConnectionState> for FfiConnectionState {
 #[derive(uniffi::Record, Debug, Clone)]
 pub struct FfiQuicStats {
     pub rtt_ms: f64,
+    pub rttvar_ms: f64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
     pub cwnd: u64,
@@ -75,25 +74,6 @@ pub struct FfiServerStats {
 pub struct FfiStatsSnapshot {
     pub connection_state: FfiConnectionState,
     pub server_stats: Option<FfiServerStats>,
-    pub loss_rate: Option<f64>,
-    pub jitter_ms: Option<f64>,
-    pub jitter_ewma_ms: Option<f64>,
-    pub loss_jitter_source: Option<FfiLossJitterSource>,
-}
-
-#[derive(uniffi::Enum, Debug, Clone, Copy)]
-pub enum FfiLossJitterSource {
-    ReceivePath,
-    SendPacing,
-}
-
-impl From<LossJitterSource> for FfiLossJitterSource {
-    fn from(value: LossJitterSource) -> Self {
-        match value {
-            LossJitterSource::ReceivePath => FfiLossJitterSource::ReceivePath,
-            LossJitterSource::SendPacing => FfiLossJitterSource::SendPacing,
-        }
-    }
 }
 
 impl From<FfiClientConfig> for ClientConfig {
@@ -168,10 +148,6 @@ pub async fn start_client(config: FfiClientConfig) -> Result<ClientHandle, Clien
     let snapshot = Arc::new(Mutex::new(ClientSnapshot {
         connection_state: ClientConnectionState::Connecting,
         last_stats: None,
-        last_loss: None,
-        last_jitter_ms: None,
-        jitter_ewma_ms: None,
-        loss_jitter_source: None,
     }));
     let snapshot_task = Arc::clone(&snapshot);
     let task = runtime.spawn(async move {
@@ -206,6 +182,7 @@ pub async fn get_stats(handle: &ClientHandle) -> Result<FfiStatsSnapshot, Client
         timestamp_ms: stats.timestamp_ms,
         quic_stats: FfiQuicStats {
             rtt_ms: stats.quic_stats.rtt_ms,
+            rttvar_ms: stats.quic_stats.rttvar_ms,
             tx_bytes: stats.quic_stats.tx_bytes,
             rx_bytes: stats.quic_stats.rx_bytes,
             cwnd: stats.quic_stats.cwnd,
@@ -217,9 +194,5 @@ pub async fn get_stats(handle: &ClientHandle) -> Result<FfiStatsSnapshot, Client
     Ok(FfiStatsSnapshot {
         connection_state: snapshot.connection_state.into(),
         server_stats,
-        loss_rate: snapshot.last_loss,
-        jitter_ms: snapshot.last_jitter_ms,
-        jitter_ewma_ms: snapshot.jitter_ewma_ms,
-        loss_jitter_source: snapshot.loss_jitter_source.map(Into::into),
     })
 }

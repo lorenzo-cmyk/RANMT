@@ -246,8 +246,8 @@ class MeasurementService : Service() {
                         pci = snapshot.pci,
                         earfcn = snapshot.earfcn,
                         networkType = snapshot.networkType,
-                        jitterMs = transport?.jitterMs ?: 0.0,
-                        lossPct = transport?.lossPct ?: 0.0
+                        rttvarMs = transport?.rttvarMs ?: 0.0,
+                        lostPackets = transport?.lostPackets ?: 0L
                     )
                     scope.launch(Dispatchers.IO) {
                         repository.appendTelemetry(id, point)
@@ -556,9 +556,9 @@ class MeasurementService : Service() {
         var sumRsrp: Long = 0
         var count: Int = 0
         var connectionDrops: Int = 0
-        var peakJitter: Double = 0.0
-        var totalJitter: Double = 0.0
-        var totalLoss: Double = 0.0
+        var peakRttvar: Double = 0.0
+        var totalRttvar: Double = 0.0
+        var totalLostPackets: Long = 0L
         var primaryRat: String? = null
         private var baseBytesSent: Long = 0
         private var baseBytesReceived: Long = 0
@@ -570,17 +570,17 @@ class MeasurementService : Service() {
             sumRsrp += point.rsrp
             maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
             minRsrp = minRsrp.coerceAtMost(point.rsrp)
-            totalJitter += point.jitterMs
-            totalLoss += point.lossPct
-            if (point.jitterMs > peakJitter) peakJitter = point.jitterMs
+            totalRttvar += point.rttvarMs
+            totalLostPackets = point.lostPackets
+            if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
             if (primaryRat == null && point.networkType.isNotBlank()) primaryRat = point.networkType
         }
 
         fun updateTransport(stats: TransportStats) {
             stats.txBytes?.let { bytesSent = baseBytesSent + it }
             stats.rxBytes?.let { bytesReceived = baseBytesReceived + it }
-            stats.jitterMs?.let { jitter ->
-                if (jitter > peakJitter) peakJitter = jitter
+            stats.rttvarMs?.let { rttvar ->
+                if (rttvar > peakRttvar) peakRttvar = rttvar
             }
         }
 
@@ -592,17 +592,17 @@ class MeasurementService : Service() {
         }
 
         fun avgRsrp(): Int = if (count == 0) 0 else (sumRsrp / count).toInt()
-        fun avgJitter(): Double = if (count == 0) 0.0 else totalJitter / count
-        fun avgLoss(): Double = if (count == 0) 0.0 else totalLoss / count
+        fun avgRttvar(): Double = if (count == 0) 0.0 else totalRttvar / count
+        fun avgLoss(): Long = if (count == 0) 0L else totalLostPackets / count
 
         fun applyAggregate(agg: TelemetryAggregate) {
             count = agg.count
             maxRsrp = agg.maxRsrp
             minRsrp = agg.minRsrp
             sumRsrp = agg.sumRsrp
-            totalJitter = agg.totalJitter
-            totalLoss = agg.totalLoss
-            peakJitter = agg.peakJitter
+            totalRttvar = agg.totalRttvar
+            totalLostPackets = agg.totalLostPackets
+            peakRttvar = agg.peakRttvar
             primaryRat = agg.primaryRat
         }
 
@@ -612,8 +612,8 @@ class MeasurementService : Service() {
                 id = id,
                 startedAt = startedAt,
                 durationSec = durationSec,
-                averageJitterMs = avgJitter(),
-                lossPct = avgLoss(),
+                averageRttvarMs = avgRttvar(),
+                lostPackets = avgLoss(),
                 primaryRat = primaryRat ?: "Unknown"
             )
         }
@@ -628,7 +628,7 @@ class MeasurementService : Service() {
                 connectionDrops = connectionDrops,
                 bytesSent = bytesSent,
                 bytesReceived = bytesReceived,
-                peakJitterMs = peakJitter
+                peakRttvarMs = peakRttvar
             )
         }
     }

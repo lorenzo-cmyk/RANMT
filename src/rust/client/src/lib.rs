@@ -38,52 +38,10 @@ pub enum ClientConnectionState {
     Disconnected,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LossJitterSource {
-    ReceivePath,
-    SendPacing,
-}
-
 #[derive(Debug, Clone)]
 pub struct ClientSnapshot {
     pub connection_state: ClientConnectionState,
     pub last_stats: Option<ServerStats>,
-    pub last_loss: Option<f64>,
-    pub last_jitter_ms: Option<f64>,
-    pub jitter_ewma_ms: Option<f64>,
-    pub loss_jitter_source: Option<LossJitterSource>,
-}
-
-struct SendJitterTracker {
-    prev_send_ms: Option<u64>,
-    jitter_ewma: f64,
-}
-
-impl SendJitterTracker {
-    fn new() -> Self {
-        Self {
-            prev_send_ms: None,
-            jitter_ewma: 0.0,
-        }
-    }
-
-    fn on_send(&mut self, now_ms: u64, expected_interval: Duration) -> f64 {
-        let jitter = match self.prev_send_ms {
-            Some(prev) => {
-                let actual = now_ms.saturating_sub(prev) as f64;
-                let expected = expected_interval.as_millis() as f64;
-                (actual - expected).abs()
-            }
-            None => 0.0,
-        };
-        self.prev_send_ms = Some(now_ms);
-        self.jitter_ewma = 0.9 * self.jitter_ewma + 0.1 * jitter;
-        jitter
-    }
-
-    fn jitter_ewma(&self) -> f64 {
-        self.jitter_ewma
-    }
 }
 
 async fn update_state(
@@ -216,19 +174,6 @@ fn display_stats(stats: &ServerStats) {
     );
 }
 
-fn display_loss(seq_num: u64, lost: u64, jitter: f64, loss_rate: &f64, jitter_ewma: f64) {
-    if lost > 0 || jitter > 1.0 {
-        tracing::info!(
-            "DL seq={} | lost={} | jitter={:.1}ms | rate={:.2}% | ewma={:.1}ms",
-            seq_num,
-            lost,
-            jitter,
-            loss_rate * 100.0,
-            jitter_ewma,
-        );
-    }
-}
-
 fn serialize_message(msg: &WireMessage) -> Option<String> {
     match serde_json::to_string(msg) {
         Ok(v) => Some(v),
@@ -296,10 +241,6 @@ pub async fn run_client_with_state(
         *snapshot = ClientSnapshot {
             connection_state: ClientConnectionState::Connecting,
             last_stats: None,
-            last_loss: None,
-            last_jitter_ms: None,
-            jitter_ewma_ms: None,
-            loss_jitter_source: None,
         };
     }
 
@@ -312,10 +253,8 @@ pub async fn run_client_with_state(
     let test_start = Instant::now();
     let mut telemetry_seq: u64 = 0;
     let mut datagram_seq: u64 = 0;
-    let mut tracker = LossJitterTracker::new();
     let mut mock_gen: Option<MockTelemetry> = None;
     let mut telemetry_backlog: VecDeque<String> = VecDeque::new();
-    let mut send_jitter = SendJitterTracker::new();
 
     let mut test_complete = false;
 
@@ -458,20 +397,6 @@ pub async fn run_client_with_state(
                     match conn.dgram_send(&payload) {
                         Ok(_) => {
                             pacer.mark_sent();
-                            if let Some(shared) = &state {
-                                let now_ms = current_epoch_ms();
-                                let jitter = send_jitter.on_send(
-                                    now_ms,
-                                    pacer.interval(),
-                                );
-                                let mut snapshot = shared.lock().await;
-                                snapshot.last_loss = Some(0.0);
-                                snapshot.last_jitter_ms = Some(jitter);
-                                snapshot.jitter_ewma_ms = Some(send_jitter.jitter_ewma());
-                                snapshot.loss_jitter_source = Some(
-                                    LossJitterSource::SendPacing,
-                                );
-                            }
                         }
                         Err(quiche::Error::Done) => {}
                         Err(e) => tracing::warn!(?e, "dgram_send error"),
@@ -521,24 +446,8 @@ pub async fn run_client_with_state(
                                 tracing::warn!(size = n, "DL datagram size mismatch, skipping");
                                 continue;
                             }
-                            if let Some((seq, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
-                                let arrival = current_epoch_ms();
-                                let (lost, jitter) = tracker.on_datagram(seq, send_ts, arrival);
-                                if let Some(shared) = &state {
-                                    let mut snapshot = shared.lock().await;
-                                    snapshot.last_loss = Some(tracker.loss_rate());
-                                    snapshot.last_jitter_ms = Some(jitter);
-                                    snapshot.jitter_ewma_ms = Some(tracker.jitter_ewma());
-                                    snapshot.loss_jitter_source =
-                                        Some(LossJitterSource::ReceivePath);
-                                }
-                                display_loss(
-                                    seq,
-                                    lost,
-                                    jitter,
-                                    &tracker.loss_rate(),
-                                    tracker.jitter_ewma(),
-                                );
+                            if let Some((seq, _send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
+                                tracing::debug!(seq, "DL datagram received");
                             }
                         }
                         Ok(_) | Err(quiche::Error::Done) => break,

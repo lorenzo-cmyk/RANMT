@@ -185,17 +185,19 @@ fn remove_binding_for_scid(session_bindings: &mut HashMap<uuid::Uuid, [u8; 16]>,
 fn extract_quic_stats(conn: &quiche::Connection) -> QuicStats {
     let s = conn.stats();
     let path = conn.path_stats().next();
-    let (rtt_ms, cwnd, send_rate_bps) = path
+    let (rtt_ms, rttvar_ms, cwnd, send_rate_bps) = path
         .map(|ps| {
             (
                 ps.rtt.as_secs_f64() * 1000.0,
+                ps.rttvar.as_secs_f64() * 1000.0,
                 ps.cwnd as u64,
                 ps.delivery_rate,
             )
         })
-        .unwrap_or((0.0, 0, 0));
+        .unwrap_or((0.0, 0.0, 0, 0));
     QuicStats {
         rtt_ms,
+        rttvar_ms,
         tx_bytes: s.sent_bytes,
         rx_bytes: s.recv_bytes,
         cwnd,
@@ -248,6 +250,10 @@ fn log_measurement_state(
         };
 
         if sess.direction == Direction::Ul {
+            let stats = conn_entry.map(|e| extract_quic_stats(&e.conn));
+            let rttvar_ms = stats.map(|s| s.rttvar_ms);
+            let lost_packets = stats.map(|s| s.lost_packets);
+
             tracing::debug!(
                 session_id = ?sid,
                 state,
@@ -260,8 +266,8 @@ fn log_measurement_state(
                 last_rx_age_ms,
                 last_stream_age_ms,
                 last_dgram_age_ms,
-                loss_rate = sess.datagram_tracker.loss_rate(),
-                jitter_ewma = sess.datagram_tracker.jitter_ewma(),
+                ?lost_packets,
+                ?rttvar_ms,
                 "measurement detail"
             );
         } else {
@@ -456,7 +462,7 @@ fn process_stream_messages(
     }
 }
 
-fn process_datagrams(entry: &mut ActiveConn, session: &mut SessionState) {
+fn process_datagrams(entry: &mut ActiveConn, _session: &mut SessionState) {
     if entry.direction != Some(Direction::Ul) {
         return;
     }
@@ -471,19 +477,8 @@ fn process_datagrams(entry: &mut ActiveConn, session: &mut SessionState) {
                     tracing::warn!(size = n, "UL datagram size mismatch, skipping");
                     continue;
                 }
-                if let Some((seq_num, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
-                    let arrival = current_epoch_ms();
-                    let (lost, jitter) = session
-                        .datagram_tracker
-                        .on_datagram(seq_num, send_ts, arrival);
-
-                    tracing::debug!(
-                        seq = seq_num,
-                        lost,
-                        ?jitter,
-                        loss_rate = session.datagram_tracker.loss_rate(),
-                        "UL datagram received"
-                    );
+                if let Some((seq_num, _send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
+                    tracing::debug!(seq = seq_num, "UL datagram received");
                 }
             }
             Ok(_) | Err(quiche::Error::Done) => break,
@@ -522,15 +517,14 @@ async fn process_connection_periodic(entry: &mut ActiveConn, socket: &UdpSocket)
 
     // Process QUIC timeout
     if let Some(timeout) = entry.conn.timeout()
-        && timeout.is_zero()
-    {
-        tracing::debug!("QUIC timeout fired");
-        entry.conn.on_timeout();
-        if entry.conn.is_closed() {
-            tracing::debug!("connection closed after timeout");
-            return false;
+        && (timeout.is_zero() || timeout <= Duration::from_millis(5)) {
+            tracing::debug!("QUIC timeout fired");
+            entry.conn.on_timeout();
+            if entry.conn.is_closed() {
+                tracing::debug!("connection closed after timeout");
+                return false;
+            }
         }
-    }
 
     // Send server stats on interval
     if entry.session_id.is_some() {
@@ -632,7 +626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Poll interval for periodic server tasks (flushing, timeouts)
     // even when no UDP packets arrive.  This keeps the handshake alive
     // between client packets.
-    let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+    let mut tick_interval = tokio::time::interval(Duration::from_millis(5));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let mut measurement_state_interval =

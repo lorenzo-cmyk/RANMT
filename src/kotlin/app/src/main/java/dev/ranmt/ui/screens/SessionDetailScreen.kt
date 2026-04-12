@@ -59,8 +59,7 @@ import dev.ranmt.data.TelemetryPoint
 import dev.ranmt.ui.formatBytes
 import dev.ranmt.ui.formatDateTime
 import dev.ranmt.ui.formatDuration
-import dev.ranmt.ui.formatJitter
-import dev.ranmt.ui.formatPct
+import dev.ranmt.ui.formatRttvar
 
 @Composable
 fun SessionDetailScreen(
@@ -294,7 +293,6 @@ private fun RadioPanel(detail: SessionDetail) {
 
 @Composable
 private fun TransportPanel(detail: SessionDetail) {
-    val lossStats = remember(detail.telemetry) { lossStats(detail.telemetry) }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -310,9 +308,10 @@ private fun TransportPanel(detail: SessionDetail) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                MetricTile("Peak Jitter", formatJitter(detail.metrics.peakJitterMs))
-                MetricTile("Max Loss", formatPct(lossStats.maxLossPct))
-                MetricTile("Loss Samples", formatPct(lossStats.lossSamplePct))
+                MetricTile("Peak Rttvar", formatRttvar(detail.metrics.peakRttvarMs))
+                MetricTile("Lost Packets", detail.summary.lostPackets.toString())
+                val dropTile = detail.metrics.connectionDrops.toString()
+                MetricTile("Drops", dropTile)
             }
         }
     }
@@ -383,7 +382,7 @@ private fun MapPanel(points: List<TelemetryPoint>) {
                     sampledPoints.forEach { point ->
                         Marker(
                             state = MarkerState(position = LatLng(point.lat, point.lon)),
-                            icon = BitmapDescriptorFactory.defaultMarker(lossHue(point.lossPct)),
+                            icon = BitmapDescriptorFactory.defaultMarker(lossHue(point.lostPackets)),
                             title = "Sample ${formatDateTime(point.timestamp)}",
                             snippet = formatMarkerSnippet(point)
                         )
@@ -422,8 +421,6 @@ private fun MetricTile(label: String, value: String) {
     }
 }
 
-private data class LossStats(val maxLossPct: Double, val lossSamplePct: Double)
-
 private data class RangeStat(val min: Double, val max: Double)
 
 private fun rangeStat(
@@ -441,17 +438,6 @@ private fun rangeStat(
     return RangeStat(min, max)
 }
 
-private fun lossStats(points: List<TelemetryPoint>): LossStats {
-    if (points.isEmpty()) return LossStats(0.0, 0.0)
-    var maxLoss = 0.0
-    var lossSamples = 0
-    points.forEach { point ->
-        if (point.lossPct > maxLoss) maxLoss = point.lossPct
-        if (point.lossPct > 0.0) lossSamples += 1
-    }
-    val pct = if (points.isEmpty()) 0.0 else (lossSamples.toDouble() / points.size) * 100.0
-    return LossStats(maxLossPct = maxLoss, lossSamplePct = pct)
-}
 
 private fun averageSpeed(points: List<TelemetryPoint>): Double {
     if (points.isEmpty()) return 0.0
@@ -478,8 +464,8 @@ private fun formatMarkerSnippet(point: TelemetryPoint): String {
         "RSRP ${point.rsrp} dBm",
         "RSRQ ${point.rsrq} dB",
         "SINR ${point.sinr} dB",
-        "Jitter ${formatJitter(point.jitterMs)}",
-        "Loss ${formatPct(point.lossPct)}"
+        "Rttvar ${formatRttvar(point.rttvarMs)}",
+        "Loss ${point.lostPackets.toString()}"
     ).joinToString(" | ")
 }
 
@@ -500,10 +486,10 @@ private fun LegendChip(color: Color, label: String) {
     }
 }
 
-private fun lossHue(lossPct: Double): Float {
+private fun lossHue(lostPackets: Long): Float {
     return when {
-        lossPct <= 1.0 -> BitmapDescriptorFactory.HUE_GREEN
-        lossPct <= 5.0 -> BitmapDescriptorFactory.HUE_YELLOW
+        lostPackets <= 1L -> BitmapDescriptorFactory.HUE_GREEN
+        lostPackets <= 5L -> BitmapDescriptorFactory.HUE_YELLOW
         else -> BitmapDescriptorFactory.HUE_RED
     }
 }

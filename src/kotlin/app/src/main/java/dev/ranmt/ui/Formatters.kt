@@ -26,4 +26,4 @@ fun formatBytes(bytes: Long): String {
 
 fun formatPct(value: Double): String = String.format(Locale.US, "%.1f%%", value)
 
-fun formatJitter(value: Double): String = String.format(Locale.US, "%.1f ms", value)
+fun formatRttvar(value: Double): String = String.format(Locale.US, "%.1f ms", value)

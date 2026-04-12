@@ -88,16 +88,11 @@ fun RunningScreen(
         val timestamp = point?.timestamp?.toString() ?: "--"
         val transport = runningState.transportStats
         val rtt = transport?.rttMs?.let { String.format("%.1f", it) } ?: "--"
-        val loss = transport?.lossPct?.let { String.format("%.2f", it) } ?: "--"
+        val loss = transport?.lostPackets?.let { it.toString() } ?: "--"
         val cwnd = transport?.cwnd?.toString() ?: "--"
         val bytesTx = transport?.txBytes?.toString() ?: "--"
         val bytesRx = transport?.rxBytes?.toString() ?: "--"
-        val jitter = transport?.jitterMs?.let { String.format("%.1f", it) } ?: "--"
-        val lossSource = when (transport?.lossJitterSource) {
-            dev.ranmt.data.LossJitterSource.ReceivePath -> "Receive path"
-            dev.ranmt.data.LossJitterSource.SendPacing -> "Send pacing"
-            null -> "--"
-        }
+        val rttvar = transport?.rttvarMs?.let { String.format("%.1f", it) } ?: "--"
 
         Spacer(modifier = Modifier.height(12.dp))
         TimerCard(seconds = runningState.elapsedSec, state = runningState.connectionState)
@@ -142,12 +137,11 @@ fun RunningScreen(
             subtitle = "QUIC statistics.",
             entries = listOf(
                 "RTT" to "$rtt ms",
-                "Loss" to "$loss %",
+                "Lost Packets" to loss,
                 "CWND" to cwnd,
-                "Jitter" to "$jitter ms",
+                "Rttvar" to "$rttvar ms",
                 "Bytes TX" to bytesTx,
-                "Bytes RX" to bytesRx,
-                "Loss Source" to lossSource
+                "Bytes RX" to bytesRx
             )
         )
         Spacer(modifier = Modifier.height(12.dp))

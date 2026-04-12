@@ -4,8 +4,8 @@ data class SessionSummary(
     val id: String,
     val startedAt: Long,
     val durationSec: Int,
-    val averageJitterMs: Double,
-    val lossPct: Double,
+    val averageRttvarMs: Double,
+    val lostPackets: Long,
     val primaryRat: String
 )
 
@@ -16,7 +16,7 @@ data class SessionMetrics(
     val connectionDrops: Int,
     val bytesSent: Long,
     val bytesReceived: Long,
-    val peakJitterMs: Double
+    val peakRttvarMs: Double
 )
 
 data class TelemetryPoint(
@@ -31,8 +31,8 @@ data class TelemetryPoint(
     val pci: Int,
     val earfcn: Int,
     val networkType: String = "Unknown",
-    val jitterMs: Double,
-    val lossPct: Double
+    val rttvarMs: Double,
+    val lostPackets: Long
 )
 
 data class TelemetryAggregate(
@@ -40,9 +40,9 @@ data class TelemetryAggregate(
     val maxRsrp: Int,
     val minRsrp: Int,
     val sumRsrp: Long,
-    val totalJitter: Double,
-    val totalLoss: Double,
-    val peakJitter: Double,
+    val totalRttvar: Double,
+    val totalLostPackets: Long,
+    val peakRttvar: Double,
     val primaryRat: String?
 )
 
@@ -62,21 +62,13 @@ data class MeasurementConfig(
 
 data class TransportStats(
     val rttMs: Double?,
+    val rttvarMs: Double?,
     val txBytes: Long?,
     val rxBytes: Long?,
     val cwnd: Long?,
     val lostPackets: Long?,
-    val sendRateBps: Long?,
-    val lossPct: Double?,
-    val jitterMs: Double?,
-    val jitterEwmaMs: Double?,
-    val lossJitterSource: LossJitterSource?
+    val sendRateBps: Long?
 )
-
-enum class LossJitterSource {
-    ReceivePath,
-    SendPacing
-}
 
 enum class ConnectionState {
     Connected,
