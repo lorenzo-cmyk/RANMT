@@ -14,12 +14,15 @@ class AppSettingsStore(context: Context) {
         val destination = prefs.getString(KEY_EXPORT_DEST, ExportDestination.Share.name)
             ?: ExportDestination.Share.name
         val includeMeta = prefs.getBoolean(KEY_CSV_META, true)
+        val profile = prefs.getString(KEY_VEHICLE_PROFILE, VehicleProfile.Generic.name)
+            ?: VehicleProfile.Generic.name
         return AppSettings(
             samplingIntervalMs = interval.coerceAtLeast(250L),
             accuracyMode = AccuracyMode.valueOf(accuracy),
             defaultExportFormat = ExportFormat.valueOf(format),
             defaultExportDestination = ExportDestination.valueOf(destination),
-            includeMetadataInCsv = includeMeta
+            includeMetadataInCsv = includeMeta,
+            vehicleProfile = VehicleProfile.valueOf(profile)
         )
     }
 
@@ -30,6 +33,7 @@ class AppSettingsStore(context: Context) {
             .putString(KEY_EXPORT_FORMAT, settings.defaultExportFormat.name)
             .putString(KEY_EXPORT_DEST, settings.defaultExportDestination.name)
             .putBoolean(KEY_CSV_META, settings.includeMetadataInCsv)
+            .putString(KEY_VEHICLE_PROFILE, settings.vehicleProfile.name)
             .apply()
     }
 
@@ -40,5 +44,6 @@ class AppSettingsStore(context: Context) {
         private const val KEY_EXPORT_FORMAT = "export_format"
         private const val KEY_EXPORT_DEST = "export_destination"
         private const val KEY_CSV_META = "include_csv_meta"
+        private const val KEY_VEHICLE_PROFILE = "vehicle_profile"
     }
 }

@@ -1,16 +1,16 @@
 package dev.ranmt.rust
 
 import android.util.Log
-import dev.ranmt.data.LossJitterSource
 import dev.ranmt.data.MeasurementConfig
 import dev.ranmt.data.TransportStats
 import uniffi.ranmt_client.ClientHandle
 import uniffi.ranmt_client.FfiClientConfig
+import uniffi.ranmt_client.FfiClientTelemetry
 import uniffi.ranmt_client.FfiConnectionState
 import uniffi.ranmt_client.FfiDirection
-import uniffi.ranmt_client.FfiLossJitterSource
 import uniffi.ranmt_client.FfiStatsSnapshot
 import uniffi.ranmt_client.getStats as ffiGetStats
+import uniffi.ranmt_client.sendTelemetry as ffiSendTelemetry
 import uniffi.ranmt_client.startClient as ffiStartClient
 import uniffi.ranmt_client.stopClient as ffiStopClient
 
@@ -37,7 +37,7 @@ object RustClient {
         return ensureLoaded()
     }
 
-    suspend fun start(config: MeasurementConfig): RustClientHandle? {
+    suspend fun start(config: MeasurementConfig, sessionId: String?): RustClientHandle? {
         if (!ensureLoaded()) {
             Log.e(TAG, "Rust library not loaded")
             return null
@@ -51,6 +51,7 @@ object RustClient {
         val ffiConfig = FfiClientConfig(
             serverAddr = host,
             serverFqdn = null,
+            sessionId = sessionId,
             port = port,
             direction = if (config.direction == "Downlink") FfiDirection.DL else FfiDirection.UL,
             bitrateBps = config.bitrateBps.toUInt(),
@@ -86,6 +87,27 @@ object RustClient {
         }
     }
 
+    suspend fun pushTelemetry(handle: RustClientHandle, point: dev.ranmt.data.TelemetryPoint) {
+        if (!loaded) return
+        try {
+            val ffiPoint = FfiClientTelemetry(
+                lat = point.lat,
+                lon = point.lon,
+                speedMps = point.speedMps,
+                rsrp = point.rsrp,
+                rsrq = point.rsrq,
+                sinr = point.sinr,
+                networkType = point.networkType,
+                cellId = point.cellId,
+                pci = point.pci,
+                earfcn = point.earfcn
+            )
+            ffiSendTelemetry(handle, ffiPoint)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to push telemetry", e)
+        }
+    }
+
     private fun ensureLoaded(): Boolean {
         if (loaded) return true
         return try {
@@ -102,23 +124,20 @@ object RustClient {
     private fun mapSnapshot(snapshot: FfiStatsSnapshot): RustSnapshot {
         val state = mapState(snapshot.connectionState)
         val server = snapshot.serverStats
-        val lossPct = snapshot.lossRate?.let { it * 100.0 }
-        val jitter = snapshot.jitterMs
-        val jitterEwma = snapshot.jitterEwmaMs
-        val lossSource = snapshot.lossJitterSource?.let { mapSource(it) }
         val transport =
-            if (server != null || lossPct != null || jitter != null || jitterEwma != null) {
+            if (server != null) {
                 TransportStats(
-                    rttMs = server?.quicStats?.rttMs,
-                    txBytes = server?.quicStats?.txBytes?.toLong(),
-                    rxBytes = server?.quicStats?.rxBytes?.toLong(),
-                    cwnd = server?.quicStats?.cwnd?.toLong(),
-                    lostPackets = server?.quicStats?.lostPackets?.toLong(),
-                    sendRateBps = server?.quicStats?.sendRateBps?.toLong(),
-                    lossPct = lossPct,
-                    jitterMs = jitter,
-                    jitterEwmaMs = jitterEwma,
-                    lossJitterSource = lossSource
+                    rttMs = server.quicStats.rttMs,
+                    rttvarMs = server.quicStats.rttvarMs,
+                    // App TX matches Server RX
+                    txBytes = server.quicStats.rxBytes.toLong(),
+                    // App RX matches Server TX
+                    rxBytes = server.quicStats.txBytes.toLong(),
+                    txPackets = server.quicStats.rxPackets.toLong(),
+                    rxPackets = server.quicStats.txPackets.toLong(),
+                    cwnd = server.quicStats.cwnd.toLong(),
+                    totalLostPackets = server.quicStats.lostPackets.toLong(),
+                    sendRateBps = server.quicStats.sendRateBps.toLong()
                 )
             } else {
                 null
@@ -132,13 +151,6 @@ object RustClient {
             FfiConnectionState.CONNECTED -> RustConnectionState.Connected
             FfiConnectionState.RECONNECTING -> RustConnectionState.Reconnecting
             FfiConnectionState.DISCONNECTED -> RustConnectionState.Disconnected
-        }
-    }
-
-    private fun mapSource(source: FfiLossJitterSource): LossJitterSource {
-        return when (source) {
-            FfiLossJitterSource.RECEIVE_PATH -> LossJitterSource.ReceivePath
-            FfiLossJitterSource.SEND_PACING -> LossJitterSource.SendPacing
         }
     }
 

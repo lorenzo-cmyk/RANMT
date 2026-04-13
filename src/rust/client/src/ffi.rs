@@ -5,9 +5,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    ClientConfig, ClientConnectionState, ClientSnapshot, LossJitterSource, run_client_with_state,
-};
+use crate::{ClientConfig, ClientConnectionState, ClientSnapshot, run_client_with_state};
 
 #[derive(uniffi::Enum, Debug, Clone, Copy)]
 pub enum FfiDirection {
@@ -28,6 +26,7 @@ impl From<FfiDirection> for Direction {
 pub struct FfiClientConfig {
     pub server_addr: String,
     pub server_fqdn: Option<String>,
+    pub session_id: Option<String>,
     pub port: u16,
     pub direction: FfiDirection,
     pub bitrate_bps: u32,
@@ -58,8 +57,11 @@ impl From<ClientConnectionState> for FfiConnectionState {
 #[derive(uniffi::Record, Debug, Clone)]
 pub struct FfiQuicStats {
     pub rtt_ms: f64,
+    pub rttvar_ms: f64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub rx_packets: u64,
     pub cwnd: u64,
     pub lost_packets: u64,
     pub send_rate_bps: u64,
@@ -75,25 +77,6 @@ pub struct FfiServerStats {
 pub struct FfiStatsSnapshot {
     pub connection_state: FfiConnectionState,
     pub server_stats: Option<FfiServerStats>,
-    pub loss_rate: Option<f64>,
-    pub jitter_ms: Option<f64>,
-    pub jitter_ewma_ms: Option<f64>,
-    pub loss_jitter_source: Option<FfiLossJitterSource>,
-}
-
-#[derive(uniffi::Enum, Debug, Clone, Copy)]
-pub enum FfiLossJitterSource {
-    ReceivePath,
-    SendPacing,
-}
-
-impl From<LossJitterSource> for FfiLossJitterSource {
-    fn from(value: LossJitterSource) -> Self {
-        match value {
-            LossJitterSource::ReceivePath => FfiLossJitterSource::ReceivePath,
-            LossJitterSource::SendPacing => FfiLossJitterSource::SendPacing,
-        }
-    }
 }
 
 impl From<FfiClientConfig> for ClientConfig {
@@ -101,6 +84,7 @@ impl From<FfiClientConfig> for ClientConfig {
         Self {
             server_addr: value.server_addr,
             server_fqdn: value.server_fqdn,
+            session_id: value.session_id,
             port: value.port,
             direction: value.direction.into(),
             bitrate_bps: value.bitrate_bps,
@@ -119,6 +103,55 @@ pub enum ClientError {
     Runtime(String),
 }
 
+#[derive(uniffi::Record, Debug, Clone)]
+pub struct FfiClientTelemetry {
+    pub lat: f64,
+    pub lon: f64,
+    pub speed_mps: f64,
+    pub rsrp: i32,
+    pub rsrq: i32,
+    pub sinr: i32,
+    pub network_type: String,
+    pub cell_id: String,
+    pub pci: i32,
+    pub earfcn: i32,
+}
+
+impl From<FfiClientTelemetry> for ranmt_shared::ClientTelemetry {
+    fn from(value: FfiClientTelemetry) -> Self {
+        Self {
+            seq_num: 0, // overridden by client loop
+            timestamp_ms: ranmt_shared::current_epoch_ms(), // typically generated near send
+            lat: value.lat,
+            lon: value.lon,
+            speed: value.speed_mps,
+            network_type: {
+                let lower = value.network_type.to_lowercase();
+                if lower.starts_with("5g") {
+                    ranmt_shared::NetworkType::FiveG
+                } else if lower.starts_with("lte") {
+                    ranmt_shared::NetworkType::Lte
+                } else if lower.starts_with("3g") || lower.starts_with("hspa") || lower.starts_with("umts") {
+                    ranmt_shared::NetworkType::ThreeG
+                } else if lower.starts_with("2g") || lower.starts_with("gsm") || lower.starts_with("edge") {
+                    ranmt_shared::NetworkType::TwoG
+                } else {
+                    ranmt_shared::NetworkType::Unknown
+                }
+            },
+            cell_id: value.cell_id.parse().unwrap_or_else(|_| {
+                tracing::warn!(cell_id = %value.cell_id, "cell_id is not a valid integer, defaulting to 0");
+                0
+            }),
+            pci: value.pci as u16,
+            earfcn: value.earfcn as u32,
+            rsrp: value.rsrp as f64,
+            rsrq: value.rsrq as f64,
+            sinr: value.sinr as f64,
+        }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct ClientHandle {
     inner: Arc<HandleInner>,
@@ -128,6 +161,7 @@ struct HandleInner {
     cancel: CancellationToken,
     task: Mutex<Option<tokio::task::JoinHandle<Result<(), String>>>>,
     snapshot: Arc<Mutex<ClientSnapshot>>,
+    telemetry_tx: tokio::sync::mpsc::UnboundedSender<ranmt_shared::ClientTelemetry>,
     #[allow(dead_code)] // Keeping `runtime` alive ensures background workers function properly
     runtime: Arc<Runtime>,
 }
@@ -137,6 +171,7 @@ impl ClientHandle {
         task: tokio::task::JoinHandle<Result<(), String>>,
         cancel: CancellationToken,
         snapshot: Arc<Mutex<ClientSnapshot>>,
+        telemetry_tx: tokio::sync::mpsc::UnboundedSender<ranmt_shared::ClientTelemetry>,
         runtime: Arc<Runtime>,
     ) -> Self {
         Self {
@@ -144,6 +179,7 @@ impl ClientHandle {
                 cancel,
                 task: Mutex::new(Some(task)),
                 snapshot,
+                telemetry_tx,
                 runtime,
             }),
         }
@@ -168,19 +204,28 @@ pub async fn start_client(config: FfiClientConfig) -> Result<ClientHandle, Clien
     let snapshot = Arc::new(Mutex::new(ClientSnapshot {
         connection_state: ClientConnectionState::Connecting,
         last_stats: None,
-        last_loss: None,
-        last_jitter_ms: None,
-        jitter_ewma_ms: None,
-        loss_jitter_source: None,
     }));
     let snapshot_task = Arc::clone(&snapshot);
+    let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::unbounded_channel();
+
     let task = runtime.spawn(async move {
-        run_client_with_state(config, cancel_task, Some(snapshot_task))
+        run_client_with_state(config, cancel_task, Some(snapshot_task), Some(telemetry_rx))
             .await
             .map_err(|err| err.to_string())
     });
 
-    Ok(ClientHandle::new(task, cancel, snapshot, runtime))
+    Ok(ClientHandle::new(
+        task,
+        cancel,
+        snapshot,
+        telemetry_tx,
+        runtime,
+    ))
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn send_telemetry(handle: &ClientHandle, telemetry: FfiClientTelemetry) {
+    let _ = handle.inner.telemetry_tx.send(telemetry.into());
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -206,8 +251,11 @@ pub async fn get_stats(handle: &ClientHandle) -> Result<FfiStatsSnapshot, Client
         timestamp_ms: stats.timestamp_ms,
         quic_stats: FfiQuicStats {
             rtt_ms: stats.quic_stats.rtt_ms,
+            rttvar_ms: stats.quic_stats.rttvar_ms,
             tx_bytes: stats.quic_stats.tx_bytes,
             rx_bytes: stats.quic_stats.rx_bytes,
+            tx_packets: stats.quic_stats.tx_packets,
+            rx_packets: stats.quic_stats.rx_packets,
             cwnd: stats.quic_stats.cwnd,
             lost_packets: stats.quic_stats.lost_packets,
             send_rate_bps: stats.quic_stats.send_rate_bps,
@@ -217,9 +265,5 @@ pub async fn get_stats(handle: &ClientHandle) -> Result<FfiStatsSnapshot, Client
     Ok(FfiStatsSnapshot {
         connection_state: snapshot.connection_state.into(),
         server_stats,
-        loss_rate: snapshot.last_loss,
-        jitter_ms: snapshot.last_jitter_ms,
-        jitter_ewma_ms: snapshot.jitter_ewma_ms,
-        loss_jitter_source: snapshot.loss_jitter_source.map(Into::into),
     })
 }

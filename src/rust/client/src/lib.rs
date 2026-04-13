@@ -22,6 +22,7 @@ mod ffi;
 pub struct ClientConfig {
     pub server_addr: String,
     pub server_fqdn: Option<String>,
+    pub session_id: Option<String>,
     pub port: u16,
     pub direction: Direction,
     pub bitrate_bps: u32,
@@ -38,52 +39,10 @@ pub enum ClientConnectionState {
     Disconnected,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LossJitterSource {
-    ReceivePath,
-    SendPacing,
-}
-
 #[derive(Debug, Clone)]
 pub struct ClientSnapshot {
     pub connection_state: ClientConnectionState,
     pub last_stats: Option<ServerStats>,
-    pub last_loss: Option<f64>,
-    pub last_jitter_ms: Option<f64>,
-    pub jitter_ewma_ms: Option<f64>,
-    pub loss_jitter_source: Option<LossJitterSource>,
-}
-
-struct SendJitterTracker {
-    prev_send_ms: Option<u64>,
-    jitter_ewma: f64,
-}
-
-impl SendJitterTracker {
-    fn new() -> Self {
-        Self {
-            prev_send_ms: None,
-            jitter_ewma: 0.0,
-        }
-    }
-
-    fn on_send(&mut self, now_ms: u64, expected_interval: Duration) -> f64 {
-        let jitter = match self.prev_send_ms {
-            Some(prev) => {
-                let actual = now_ms.saturating_sub(prev) as f64;
-                let expected = expected_interval.as_millis() as f64;
-                (actual - expected).abs()
-            }
-            None => 0.0,
-        };
-        self.prev_send_ms = Some(now_ms);
-        self.jitter_ewma = 0.9 * self.jitter_ewma + 0.1 * jitter;
-        jitter
-    }
-
-    fn jitter_ewma(&self) -> f64 {
-        self.jitter_ewma
-    }
 }
 
 async fn update_state(
@@ -125,6 +84,7 @@ fn make_quic_config() -> Result<quiche::Config, quiche::Error> {
     config.set_max_recv_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_send_udp_payload_size(MAX_QUIC_PACKET);
     config.set_max_idle_timeout(IDLE_TIMEOUT_MS);
+    config.set_max_ack_delay(5); // Reduced to 5ms to prevent RTT inflation/jitter
     config.set_initial_max_streams_bidi(4);
     config.set_initial_max_streams_uni(4);
     config.set_initial_max_stream_data_bidi_local(5_242_880);
@@ -208,25 +168,12 @@ fn display_stats(stats: &ServerStats) {
     tracing::info!(
         "RTT={:.1}ms | TX={}B | RX={}B | CWND={}B | Lost={} | Rate={}bps",
         stats.quic_stats.rtt_ms,
-        stats.quic_stats.tx_bytes,
-        stats.quic_stats.rx_bytes,
+        stats.quic_stats.rx_bytes, // Client TX is Server RX
+        stats.quic_stats.tx_bytes, // Client RX is Server TX
         stats.quic_stats.cwnd,
         stats.quic_stats.lost_packets,
         stats.quic_stats.send_rate_bps,
     );
-}
-
-fn display_loss(seq_num: u64, lost: u64, jitter: f64, loss_rate: &f64, jitter_ewma: f64) {
-    if lost > 0 || jitter > 1.0 {
-        tracing::info!(
-            "DL seq={} | lost={} | jitter={:.1}ms | rate={:.2}% | ewma={:.1}ms",
-            seq_num,
-            lost,
-            jitter,
-            loss_rate * 100.0,
-            jitter_ewma,
-        );
-    }
 }
 
 fn serialize_message(msg: &WireMessage) -> Option<String> {
@@ -283,27 +230,37 @@ pub async fn run_client_with_cancel(
     config: ClientConfig,
     cancel: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    run_client_with_state(config, cancel, None).await
+    run_client_with_state(config, cancel, None, None).await
 }
 
 pub async fn run_client_with_state(
     config: ClientConfig,
     cancel: CancellationToken,
     state: Option<Arc<Mutex<ClientSnapshot>>>,
+    mut telemetry_rx: Option<tokio::sync::mpsc::UnboundedReceiver<ranmt_shared::ClientTelemetry>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(shared) = &state {
         let mut snapshot = shared.lock().await;
         *snapshot = ClientSnapshot {
             connection_state: ClientConnectionState::Connecting,
             last_stats: None,
-            last_loss: None,
-            last_jitter_ms: None,
-            jitter_ewma_ms: None,
-            loss_jitter_source: None,
         };
     }
 
-    let session_id = uuid::Uuid::new_v4();
+    let session_id = config
+        .session_id
+        .as_ref()
+        .and_then(|id| {
+            match core::str::FromStr::from_str(id) {
+                Ok(uuid) => Some(uuid),
+                Err(_) => {
+                    tracing::warn!(session_id = %id, "failed to parse session_id as UUID, generating new one");
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(uuid::Uuid::new_v4);
+
     tracing::info!(session_id = %session_id, "starting RANMT client");
 
     let peer_addr = resolve_ipv4(&config.server_addr, config.port)?;
@@ -312,10 +269,8 @@ pub async fn run_client_with_state(
     let test_start = Instant::now();
     let mut telemetry_seq: u64 = 0;
     let mut datagram_seq: u64 = 0;
-    let mut tracker = LossJitterTracker::new();
     let mut mock_gen: Option<MockTelemetry> = None;
     let mut telemetry_backlog: VecDeque<String> = VecDeque::new();
-    let mut send_jitter = SendJitterTracker::new();
 
     let mut test_complete = false;
 
@@ -424,8 +379,18 @@ pub async fn run_client_with_state(
                 }
 
                 // Telemetry generation must continue even during silent links.
-                _ = telemetry_interval.tick() => {
-                    let tel = mock_gen.generate();
+                tel_opt = async {
+                    if let Some(rx) = telemetry_rx.as_mut() {
+                        match rx.recv().await { Some(t) => Some(t), None => std::future::pending().await }
+                    } else {
+                        telemetry_interval.tick().await;
+                        Some(mock_gen.generate())
+                    }
+                } => {
+                    let Some(mut tel) = tel_opt else { continue; };
+                    tel.seq_num = telemetry_seq;
+                    telemetry_seq += 1;
+
                     let Some(json) = serialize_message(
                         &WireMessage::ClientTelemetry(tel)
                     ) else {
@@ -458,20 +423,6 @@ pub async fn run_client_with_state(
                     match conn.dgram_send(&payload) {
                         Ok(_) => {
                             pacer.mark_sent();
-                            if let Some(shared) = &state {
-                                let now_ms = current_epoch_ms();
-                                let jitter = send_jitter.on_send(
-                                    now_ms,
-                                    pacer.interval(),
-                                );
-                                let mut snapshot = shared.lock().await;
-                                snapshot.last_loss = Some(0.0);
-                                snapshot.last_jitter_ms = Some(jitter);
-                                snapshot.jitter_ewma_ms = Some(send_jitter.jitter_ewma());
-                                snapshot.loss_jitter_source = Some(
-                                    LossJitterSource::SendPacing,
-                                );
-                            }
                         }
                         Err(quiche::Error::Done) => {}
                         Err(e) => tracing::warn!(?e, "dgram_send error"),
@@ -522,23 +473,9 @@ pub async fn run_client_with_state(
                                 continue;
                             }
                             if let Some((seq, send_ts)) = decode_traffic_payload(&dgram_buf[..n]) {
-                                let arrival = current_epoch_ms();
-                                let (lost, jitter) = tracker.on_datagram(seq, send_ts, arrival);
-                                if let Some(shared) = &state {
-                                    let mut snapshot = shared.lock().await;
-                                    snapshot.last_loss = Some(tracker.loss_rate());
-                                    snapshot.last_jitter_ms = Some(jitter);
-                                    snapshot.jitter_ewma_ms = Some(tracker.jitter_ewma());
-                                    snapshot.loss_jitter_source =
-                                        Some(LossJitterSource::ReceivePath);
-                                }
-                                display_loss(
-                                    seq,
-                                    lost,
-                                    jitter,
-                                    &tracker.loss_rate(),
-                                    tracker.jitter_ewma(),
-                                );
+                                let now = current_epoch_ms();
+                                let owd_ms = now.saturating_sub(send_ts) as f64;
+                                tracing::debug!(seq, owd_ms, "DL datagram received");
                             }
                         }
                         Ok(_) | Err(quiche::Error::Done) => break,
@@ -614,8 +551,17 @@ pub async fn run_client_with_state(
                     return Ok(());
                 }
                 _ = tokio::time::sleep_until(reconnect_deadline) => break,
-                _ = telemetry_interval.tick() => {
-                    let tel = mock_gen.generate();
+                tel_opt = async {
+                    if let Some(rx) = telemetry_rx.as_mut() {
+                        match rx.recv().await { Some(t) => Some(t), None => std::future::pending().await }
+                    } else {
+                        telemetry_interval.tick().await;
+                        Some(mock_gen.generate())
+                    }
+                } => {
+                    let Some(mut tel) = tel_opt else { continue; };
+                    tel.seq_num = telemetry_seq;
+                    telemetry_seq += 1;
                     if let Some(json) = serialize_message(
                         &WireMessage::ClientTelemetry(tel)
                     ) {
@@ -626,7 +572,7 @@ pub async fn run_client_with_state(
         }
 
         // Persist state across reconnects (spec §8.2 rule 4: never reset seq_nums)
-        telemetry_seq = mock_gen.seq_num;
+        mock_gen.seq_num = telemetry_seq;
         datagram_seq = pacer.next_seq();
     }
 }

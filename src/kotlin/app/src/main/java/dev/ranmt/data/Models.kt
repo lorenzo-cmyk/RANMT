@@ -4,8 +4,8 @@ data class SessionSummary(
     val id: String,
     val startedAt: Long,
     val durationSec: Int,
-    val averageJitterMs: Double,
-    val lossPct: Double,
+    val averageRttvarMs: Double,
+    val averageLossPct: Double,
     val primaryRat: String
 )
 
@@ -13,10 +13,8 @@ data class SessionMetrics(
     val maxRsrp: Int,
     val minRsrp: Int,
     val avgRsrp: Int,
-    val connectionDrops: Int,
-    val bytesSent: Long,
-    val bytesReceived: Long,
-    val peakJitterMs: Double
+    val lossSpikes: Int,
+    val peakRttvarMs: Double
 )
 
 data class TelemetryPoint(
@@ -31,7 +29,7 @@ data class TelemetryPoint(
     val pci: Int,
     val earfcn: Int,
     val networkType: String = "Unknown",
-    val jitterMs: Double,
+    val rttvarMs: Double,
     val lossPct: Double
 )
 
@@ -40,9 +38,9 @@ data class TelemetryAggregate(
     val maxRsrp: Int,
     val minRsrp: Int,
     val sumRsrp: Long,
-    val totalJitter: Double,
-    val totalLoss: Double,
-    val peakJitter: Double,
+    val totalRttvar: Double,
+    val totalLossPct: Double,
+    val peakRttvar: Double,
     val primaryRat: String?
 )
 
@@ -62,25 +60,18 @@ data class MeasurementConfig(
 
 data class TransportStats(
     val rttMs: Double?,
+    val rttvarMs: Double?,
     val txBytes: Long?,
     val rxBytes: Long?,
+    val txPackets: Long?,
+    val rxPackets: Long?,
     val cwnd: Long?,
-    val lostPackets: Long?,
-    val sendRateBps: Long?,
-    val lossPct: Double?,
-    val jitterMs: Double?,
-    val jitterEwmaMs: Double?,
-    val lossJitterSource: LossJitterSource?
+    val totalLostPackets: Long?,
+    val sendRateBps: Long?
 )
-
-enum class LossJitterSource {
-    ReceivePath,
-    SendPacing
-}
 
 enum class ConnectionState {
     Connected,
-    Buffering,
     Reconnecting
 }
 
@@ -99,10 +90,15 @@ enum class AccuracyMode {
     High
 }
 
+enum class VehicleProfile {
+    Train, Car, Walking, Generic
+}
+
 data class AppSettings(
     val samplingIntervalMs: Long = 1000L,
     val accuracyMode: AccuracyMode = AccuracyMode.High,
     val defaultExportFormat: ExportFormat = ExportFormat.Csv,
     val defaultExportDestination: ExportDestination = ExportDestination.Share,
-    val includeMetadataInCsv: Boolean = true
+    val includeMetadataInCsv: Boolean = true,
+    val vehicleProfile: VehicleProfile = VehicleProfile.Generic
 )

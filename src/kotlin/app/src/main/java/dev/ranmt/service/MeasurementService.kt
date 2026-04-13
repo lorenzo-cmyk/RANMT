@@ -14,11 +14,9 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
-import android.telephony.CellInfoLte
-import android.telephony.CellInfoNr
-import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.Granularity
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -50,10 +48,10 @@ import java.util.UUID
 class MeasurementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var repository: SessionRepository
-    private lateinit var telephonyManager: TelephonyManager
     private lateinit var connectivityManager: ConnectivityManager
     private lateinit var sessionPrefs: SessionPrefs
     private lateinit var settingsStore: AppSettingsStore
+    private lateinit var netmonster: cz.mroczis.netmonster.core.INetMonster
     private var locationCallback: LocationCallback? = null
     private var sessionId: String? = null
     private var startedAt: Long = 0L
@@ -65,16 +63,20 @@ class MeasurementService : Service() {
     private var lastTransportStats: TransportStats? = null
     private var wifiNetwork: Network? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var kalmanFilter: GpsKalmanFilter? = null
+    private var lastTotalLost: Long = 0L
+    private var lastTotalSent: Long = 0L
+    private var testDirection: String = "Uplink"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         repository = SessionRepository(this)
-        telephonyManager = getSystemService(TelephonyManager::class.java)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         sessionPrefs = SessionPrefs(this)
         settingsStore = AppSettingsStore(this)
+        netmonster = cz.mroczis.netmonster.core.factory.NetMonsterFactory.get(this)
         bindWifiNetwork()
     }
 
@@ -109,6 +111,9 @@ class MeasurementService : Service() {
         sessionId = UUID.randomUUID().toString()
         startedAt = System.currentTimeMillis()
         metrics = MetricsAccumulator()
+        lastTotalLost = 0L
+        lastTotalSent = 0L
+        testDirection = config.direction
 
         val id = sessionId ?: return
         sessionPrefs.saveActive(id, startedAt, config)
@@ -117,7 +122,7 @@ class MeasurementService : Service() {
         RunningSessionState.start(id, resumed = false)
         updateConnectionState()
         startElapsedTimer()
-        startRustClient(config)
+        startRustClient(config, id)
         startLocationUpdates()
     }
 
@@ -127,17 +132,18 @@ class MeasurementService : Service() {
         sessionId = active.sessionId
         startedAt = active.startedAt
         metrics = MetricsAccumulator()
+        lastTotalLost = 0L
+        lastTotalSent = 0L
         repository.aggregateTelemetry(active.sessionId)?.let { agg ->
             metrics.applyAggregate(agg)
         }
-        metrics.applyTransport(active.bytesSent, active.bytesReceived)
-        metrics.connectionDrops = active.connectionDrops + 1
+        metrics.lossSpikes = active.lossSpikes + 1
         repository.startSession(active.sessionId, active.startedAt, active.config)
         RunningSessionState.start(active.sessionId, resumed = true)
         startForeground(NOTIFICATION_ID, buildNotification())
         updateConnectionState()
         startElapsedTimer()
-        startRustClient(active.config)
+        startRustClient(active.config, active.sessionId)
         startLocationUpdates()
     }
 
@@ -147,8 +153,7 @@ class MeasurementService : Service() {
         stopRustClient()
         elapsedJob?.cancel()
 
-        sessionPrefs.saveTransport(metrics.bytesSent, metrics.bytesReceived)
-        sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
+        sessionPrefs.saveLossSpikes(metrics.lossSpikes)
 
         val endTime = System.currentTimeMillis()
         val summary = metrics.toSummary(id, startedAt, endTime)
@@ -193,22 +198,79 @@ class MeasurementService : Service() {
             AccuracyMode.High -> Priority.PRIORITY_HIGH_ACCURACY
             AccuracyMode.Balanced -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
         }
+
+        kalmanFilter = when (settings.vehicleProfile) {
+            dev.ranmt.data.VehicleProfile.Train -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 0.4,
+                maxPlausibleAccelMps2 = 1.2
+            )
+
+            dev.ranmt.data.VehicleProfile.Car -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 2.0,
+                maxPlausibleAccelMps2 = 5.0
+            )
+
+            dev.ranmt.data.VehicleProfile.Walking -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 1.0,
+                maxPlausibleAccelMps2 = 3.0
+            )
+
+            dev.ranmt.data.VehicleProfile.Generic -> GpsKalmanFilter(
+                accelerationNoiseMps2 = 1.5,
+                maxPlausibleAccelMps2 = 4.0
+            )
+        }
+
         val request = LocationRequest.Builder(priority, settings.samplingIntervalMs)
-            .setMinUpdateIntervalMillis(settings.samplingIntervalMs)
-            .setMinUpdateDistanceMeters(0f)
+            .setMinUpdateIntervalMillis(settings.samplingIntervalMs / 2) // Allow faster updates if available.
+            .setMinUpdateDistanceMeters(0f) // Don't filter by distance; we'll handle it in the callback if needed.
+            .setGranularity(Granularity.GRANULARITY_FINE) // Request full location details if possible.
+            .setMaxUpdateDelayMillis(settings.samplingIntervalMs * 2) // Allow batching up to 2 intervals.
             .build()
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val id = sessionId ?: return
                 result.locations.forEach { location ->
+                    val filtered = kalmanFilter?.update(location)
                     val snapshot = snapshotRadio()
                     val transport = lastTransportStats
+
+                    val finalSpeed = filtered?.speedMs?.toDouble() ?: location.speed.toDouble()
+                    val finalLat = filtered?.latitude ?: location.latitude
+                    val finalLon = filtered?.longitude ?: location.longitude
+
+                    val currentTotalLost = transport?.totalLostPackets ?: 0L
+                    val currentTotalSent = if (testDirection == "Uplink")
+                        transport?.txPackets ?: 0L
+                    else
+                        transport?.rxPackets ?: 0L
+
+                    val lostDelta = if (currentTotalLost >= lastTotalLost) {
+                        currentTotalLost - lastTotalLost
+                    } else {
+                        currentTotalLost
+                    }
+                    val sentDelta = if (currentTotalSent >= lastTotalSent) {
+                        currentTotalSent - lastTotalSent
+                    } else {
+                        currentTotalSent
+                    }
+
+                    lastTotalLost = currentTotalLost
+                    lastTotalSent = currentTotalSent
+
+                    val lossPct = if (sentDelta > 0) {
+                        (lostDelta.toDouble() / sentDelta.toDouble()) * 100.0
+                    } else {
+                        0.0
+                    }
+
                     val point = TelemetryPoint(
                         timestamp = location.time,
-                        lat = location.latitude,
-                        lon = location.longitude,
-                        speedMps = location.speed.toDouble(),
+                        lat = finalLat,
+                        lon = finalLon,
+                        speedMps = finalSpeed,
                         rsrp = snapshot.rsrp,
                         rsrq = snapshot.rsrq,
                         sinr = snapshot.sinr,
@@ -216,11 +278,14 @@ class MeasurementService : Service() {
                         pci = snapshot.pci,
                         earfcn = snapshot.earfcn,
                         networkType = snapshot.networkType,
-                        jitterMs = transport?.jitterMs ?: 0.0,
-                        lossPct = transport?.lossPct ?: 0.0
+                        rttvarMs = transport?.rttvarMs ?: 0.0,
+                        lossPct = lossPct
                     )
                     scope.launch(Dispatchers.IO) {
                         repository.appendTelemetry(id, point)
+                        rustHandle?.let {
+                            dev.ranmt.rust.RustClient.pushTelemetry(it, point)
+                        }
                     }
                     RunningSessionState.pushTelemetry(point)
                     metrics.update(point)
@@ -238,6 +303,8 @@ class MeasurementService : Service() {
         LocationServices.getFusedLocationProviderClient(this)
             .removeLocationUpdates(callback)
         locationCallback = null
+        kalmanFilter?.reset()
+        kalmanFilter = null
     }
 
     private fun updateConnectionState() {
@@ -252,11 +319,14 @@ class MeasurementService : Service() {
         RunningSessionState.updateConnection(state)
     }
 
-    private fun startRustClient(config: MeasurementConfig) {
+    private fun startRustClient(config: MeasurementConfig, sessionId: String?) {
         stopRustClient()
-        rustStartJob?.cancel()
         rustStartJob = scope.launch(Dispatchers.IO) {
-            val handle = RustClient.start(config) ?: return@launch
+            val handle = RustClient.start(config, sessionId) ?: return@launch
+            if (!isActive) {
+                RustClient.stop(handle)
+                return@launch
+            }
             rustHandle = handle
             startRustPolling(handle)
         }
@@ -270,8 +340,7 @@ class MeasurementService : Service() {
                 if (snapshot != null) {
                     lastTransportStats = snapshot.transport
                     snapshot.transport?.let { metrics.updateTransport(it) }
-                    sessionPrefs.saveTransport(metrics.bytesSent, metrics.bytesReceived)
-                    sessionPrefs.saveConnectionDrops(metrics.connectionDrops)
+                    sessionPrefs.saveLossSpikes(metrics.lossSpikes)
                     RunningSessionState.updateTransport(snapshot.transport)
                     RunningSessionState.updateConnection(mapConnectionState(snapshot.state))
                 }
@@ -285,14 +354,15 @@ class MeasurementService : Service() {
         rustStartJob = null
         rustPollingJob?.cancel()
         rustPollingJob = null
-        rustHandle?.let { handle ->
+        val handle = rustHandle
+        rustHandle = null
+        lastTransportStats = null
+        RunningSessionState.updateTransport(null)
+        if (handle != null) {
             scope.launch(Dispatchers.IO) {
                 RustClient.stop(handle)
             }
         }
-        rustHandle = null
-        lastTransportStats = null
-        RunningSessionState.updateTransport(null)
     }
 
     private fun mapConnectionState(state: RustConnectionState): ConnectionState {
@@ -302,20 +372,6 @@ class MeasurementService : Service() {
             RustConnectionState.Reconnecting -> ConnectionState.Reconnecting
             RustConnectionState.Disconnected -> ConnectionState.Reconnecting
         }
-    }
-
-    private fun normalizeServer(config: MeasurementConfig): Pair<String, Int> {
-        val raw = config.serverIp.trim()
-        val idx = raw.lastIndexOf(':')
-        if (idx > 0 && idx == raw.indexOf(':')) {
-            val host = raw.substring(0, idx).trim()
-            val portText = raw.substring(idx + 1).trim()
-            val port = portText.toIntOrNull()
-            if (host.isNotBlank() && port != null && port in 1..65535) {
-                return host to port
-            }
-        }
-        return raw to config.serverPort
     }
 
     private fun bindWifiNetwork() {
@@ -362,41 +418,84 @@ class MeasurementService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun snapshotRadio(): RadioSnapshot {
-        val networkType = networkTypeName(telephonyManager.dataNetworkType)
-        val cells = telephonyManager.allCellInfo
-        val registered = cells.firstOrNull { it.isRegistered }
+        val subId = Int.MAX_VALUE
+
+        val networkTypeEnum = try {
+            netmonster.getNetworkType(subId)
+        } catch (e: Exception) {
+            null
+        }
+        val networkType = networkTypeEnum?.let { formatNetworkType(it) } ?: "Unknown"
+
+        val cells = try {
+            netmonster.getCells()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        val registered =
+            cells.firstOrNull { it.connectionStatus is cz.mroczis.netmonster.core.model.connection.PrimaryConnection }
+                ?: cells.firstOrNull { it.connectionStatus is cz.mroczis.netmonster.core.model.connection.SecondaryConnection }
+                ?: cells.firstOrNull() // fallback
 
         return when (registered) {
-            is CellInfoNr -> {
-                val identity = registered.cellIdentity
-                val signal = registered.cellSignalStrength
-                val rsrp = reflectInt(signal, "getSsRsrp") ?: signal.dbm
-                val rsrq = reflectInt(signal, "getSsRsrq") ?: 0
-                val sinr = reflectInt(signal, "getSsSinr") ?: 0
-                val nci = reflectLong(identity, "getNci")
-                val pci = reflectInt(identity, "getPci") ?: 0
-                val nrarfcn = reflectInt(identity, "getNrarfcn") ?: 0
+            is cz.mroczis.netmonster.core.model.cell.CellNr -> {
+                val signal = registered.signal
+                val rsrp = signal.ssRsrp ?: 0
+                val rsrq = signal.ssRsrq ?: 0
+                val sinr = signal.ssSinr ?: 0
                 RadioSnapshot(
                     rsrp = safeSignal(rsrp),
                     rsrq = safeSignal(rsrq),
                     sinr = safeSignal(sinr),
-                    cellId = nci?.toString() ?: "",
-                    pci = pci,
-                    earfcn = nrarfcn,
+                    cellId = registered.nci?.toString() ?: "",
+                    pci = registered.pci ?: 0,
+                    earfcn = registered.band?.channelNumber ?: 0,
                     networkType = networkType
                 )
             }
 
-            is CellInfoLte -> {
-                val identity = registered.cellIdentity
-                val signal = registered.cellSignalStrength
+            is cz.mroczis.netmonster.core.model.cell.CellLte -> {
+                val signal = registered.signal
+                val rsrp = signal.rsrp?.toInt() ?: 0
+                val rsrq = signal.rsrq?.toInt() ?: 0
+                val sinr = signal.snr?.toInt() ?: 0
                 RadioSnapshot(
-                    rsrp = safeSignal(signal.rsrp),
-                    rsrq = safeSignal(signal.rsrq),
-                    sinr = safeSignal(signal.rssnr),
-                    cellId = identity.ci.toString(),
-                    pci = identity.pci,
-                    earfcn = identity.earfcn,
+                    rsrp = safeSignal(rsrp),
+                    rsrq = safeSignal(rsrq),
+                    sinr = safeSignal(sinr),
+                    cellId = registered.eci?.toString() ?: "",
+                    pci = registered.pci ?: 0,
+                    earfcn = registered.band?.channelNumber ?: 0,
+                    networkType = networkType
+                )
+            }
+
+            is cz.mroczis.netmonster.core.model.cell.CellWcdma -> {
+                val signal = registered.signal
+                val rscp = signal.rscp ?: signal.rssi ?: 0
+                val ecno = signal.ecno ?: signal.ecio ?: 0
+                RadioSnapshot(
+                    rsrp = safeSignal(rscp),
+                    rsrq = safeSignal(ecno),
+                    sinr = 0,
+                    cellId = registered.ci?.toString() ?: "",
+                    pci = registered.psc ?: 0,
+                    earfcn = registered.band?.channelNumber ?: 0,
+                    networkType = networkType
+                )
+            }
+
+            is cz.mroczis.netmonster.core.model.cell.CellGsm -> {
+                val signal = registered.signal
+                val rssi = signal.rssi ?: 0
+                RadioSnapshot(
+                    rsrp = safeSignal(rssi),
+                    rsrq = 0,
+                    sinr = 0,
+                    cellId = registered.cid?.toString() ?: "",
+                    pci = registered.bsic ?: 0,
+                    earfcn = registered.band?.channelNumber ?: 0,
                     networkType = networkType
                 )
             }
@@ -409,33 +508,29 @@ class MeasurementService : Service() {
         return if (value == Int.MAX_VALUE || value == Int.MIN_VALUE) 0 else value
     }
 
-    private fun reflectInt(target: Any, method: String): Int? {
-        return try {
-            val m = target.javaClass.getMethod(method)
-            (m.invoke(target) as? Int)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun reflectLong(target: Any, method: String): Long? {
-        return try {
-            val m = target.javaClass.getMethod(method)
-            (m.invoke(target) as? Long)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun networkTypeName(type: Int): String {
+    private fun formatNetworkType(type: cz.mroczis.netmonster.core.db.model.NetworkType): String {
         return when (type) {
-            TelephonyManager.NETWORK_TYPE_NR -> "5G"
-            TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
-            TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPA+"
-            TelephonyManager.NETWORK_TYPE_HSPA -> "HSPA"
-            TelephonyManager.NETWORK_TYPE_EDGE -> "EDGE"
-            TelephonyManager.NETWORK_TYPE_GPRS -> "GPRS"
-            else -> "Unknown"
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Gsm -> "GSM/EDGE"
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Cdma -> "CDMA"
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Wcdma -> "HSPA/UMTS"
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Lte -> {
+                when (type.technology) {
+                    cz.mroczis.netmonster.core.db.model.NetworkType.LTE_CA -> "LTE-CA"
+                    cz.mroczis.netmonster.core.db.model.NetworkType.IWLAN -> "IWLAN"
+                    else -> "LTE"
+                }
+            }
+
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Tdscdma -> "TD-SCDMA"
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Nr -> {
+                when (type) {
+                    is cz.mroczis.netmonster.core.db.model.NetworkType.Nr.Nsa -> "5G-NSA"
+                    is cz.mroczis.netmonster.core.db.model.NetworkType.Nr.Sa -> "5G-SA"
+                    else -> "5G"
+                }
+            }
+
+            is cz.mroczis.netmonster.core.db.model.NetworkType.Unknown -> "Unknown"
         }
     }
 
@@ -480,73 +575,80 @@ class MeasurementService : Service() {
     }
 
     private class MetricsAccumulator {
+        @Volatile
         var maxRsrp: Int = Int.MIN_VALUE
+        @Volatile
         var minRsrp: Int = Int.MAX_VALUE
+        @Volatile
         var sumRsrp: Long = 0
+        @Volatile
         var count: Int = 0
-        var connectionDrops: Int = 0
-        var peakJitter: Double = 0.0
-        var totalJitter: Double = 0.0
-        var totalLoss: Double = 0.0
+        @Volatile
+        var lossSpikes: Int = 0
+        @Volatile
+        var peakRttvar: Double = 0.0
+        @Volatile
+        var totalRttvar: Double = 0.0
+        @Volatile
+        var totalLossPct: Double = 0.0
+        @Volatile
         var primaryRat: String? = null
-        private var baseBytesSent: Long = 0
-        private var baseBytesReceived: Long = 0
-        var bytesSent: Long = 0
-        var bytesReceived: Long = 0
 
+        @Synchronized
         fun update(point: TelemetryPoint) {
             count += 1
             sumRsrp += point.rsrp
             maxRsrp = maxRsrp.coerceAtLeast(point.rsrp)
             minRsrp = minRsrp.coerceAtMost(point.rsrp)
-            totalJitter += point.jitterMs
-            totalLoss += point.lossPct
-            if (point.jitterMs > peakJitter) peakJitter = point.jitterMs
+            totalRttvar += point.rttvarMs
+            totalLossPct += point.lossPct
+            if (point.lossPct > 20.0) lossSpikes++
+            if (point.rttvarMs > peakRttvar) peakRttvar = point.rttvarMs
             if (primaryRat == null && point.networkType.isNotBlank()) primaryRat = point.networkType
         }
 
+        @Synchronized
         fun updateTransport(stats: TransportStats) {
-            stats.txBytes?.let { bytesSent = baseBytesSent + it }
-            stats.rxBytes?.let { bytesReceived = baseBytesReceived + it }
-            stats.jitterMs?.let { jitter ->
-                if (jitter > peakJitter) peakJitter = jitter
+            stats.rttvarMs?.let { rttvar ->
+                if (rttvar > peakRttvar) peakRttvar = rttvar
             }
         }
 
-        fun applyTransport(bytesSent: Long, bytesReceived: Long) {
-            baseBytesSent = bytesSent
-            baseBytesReceived = bytesReceived
-            this.bytesSent = bytesSent
-            this.bytesReceived = bytesReceived
-        }
-
+        @Synchronized
         fun avgRsrp(): Int = if (count == 0) 0 else (sumRsrp / count).toInt()
-        fun avgJitter(): Double = if (count == 0) 0.0 else totalJitter / count
-        fun avgLoss(): Double = if (count == 0) 0.0 else totalLoss / count
 
+        @Synchronized
+        fun avgRttvar(): Double = if (count == 0) 0.0 else totalRttvar / count
+
+        @Synchronized
+        fun avgLoss(): Double = if (count == 0) 0.0 else totalLossPct / count
+
+        @Synchronized
         fun applyAggregate(agg: TelemetryAggregate) {
             count = agg.count
             maxRsrp = agg.maxRsrp
             minRsrp = agg.minRsrp
             sumRsrp = agg.sumRsrp
-            totalJitter = agg.totalJitter
-            totalLoss = agg.totalLoss
-            peakJitter = agg.peakJitter
+            totalRttvar = agg.totalRttvar
+            totalLossPct = agg.totalLossPct
+            peakRttvar = agg.peakRttvar
             primaryRat = agg.primaryRat
         }
 
+        @Synchronized
         fun toSummary(id: String, startedAt: Long, endTime: Long): SessionSummary {
             val durationSec = ((endTime - startedAt) / 1000).toInt().coerceAtLeast(0)
             return SessionSummary(
                 id = id,
                 startedAt = startedAt,
                 durationSec = durationSec,
-                averageJitterMs = avgJitter(),
-                lossPct = avgLoss(),
+                averageRttvarMs = avgRttvar(),
+                averageLossPct = avgLoss(),
                 primaryRat = primaryRat ?: "Unknown"
             )
         }
 
+        @Synchronized
         fun toMetrics(): SessionMetrics {
             val safeMax = if (count == 0) 0 else maxRsrp
             val safeMin = if (count == 0) 0 else minRsrp
@@ -554,10 +656,8 @@ class MeasurementService : Service() {
                 maxRsrp = safeMax,
                 minRsrp = safeMin,
                 avgRsrp = avgRsrp(),
-                connectionDrops = connectionDrops,
-                bytesSent = bytesSent,
-                bytesReceived = bytesReceived,
-                peakJitterMs = peakJitter
+                lossSpikes = lossSpikes,
+                peakRttvarMs = peakRttvar
             )
         }
     }

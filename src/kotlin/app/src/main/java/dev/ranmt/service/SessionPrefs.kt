@@ -18,21 +18,23 @@ class SessionPrefs(context: Context) {
             .apply()
     }
 
-    fun saveTransport(bytesSent: Long, bytesReceived: Long) {
+    fun saveLossSpikes(spikes: Int) {
         prefs.edit()
-            .putLong(KEY_BYTES_SENT, bytesSent)
-            .putLong(KEY_BYTES_RECEIVED, bytesReceived)
-            .apply()
-    }
-
-    fun saveConnectionDrops(drops: Int) {
-        prefs.edit()
-            .putInt(KEY_CONNECTION_DROPS, drops)
+            .putInt(KEY_LOSS_SPIKES, spikes)
             .apply()
     }
 
     fun clearActive() {
-        prefs.edit().clear().apply()
+        prefs.edit()
+            .remove(KEY_SESSION_ID)
+            .remove(KEY_STARTED_AT)
+            .remove(KEY_SERVER_IP)
+            .remove(KEY_SERVER_PORT)
+            .remove(KEY_DIRECTION)
+            .remove(KEY_BITRATE)
+            .remove(KEY_INSECURE)
+            .remove(KEY_LOSS_SPIKES)
+            .apply()
     }
 
     fun hasActive(): Boolean {
@@ -47,16 +49,12 @@ class SessionPrefs(context: Context) {
         val direction = prefs.getString(KEY_DIRECTION, "Uplink") ?: "Uplink"
         val bitrate = prefs.getInt(KEY_BITRATE, 0)
         val insecure = prefs.getBoolean(KEY_INSECURE, false)
-        val bytesSent = prefs.getLong(KEY_BYTES_SENT, 0L)
-        val bytesReceived = prefs.getLong(KEY_BYTES_RECEIVED, 0L)
-        val connectionDrops = prefs.getInt(KEY_CONNECTION_DROPS, 0)
+        val lossSpikes = prefs.getInt(KEY_LOSS_SPIKES, 0)
         return ActiveSession(
             sessionId = id,
             startedAt = startedAt,
             config = MeasurementConfig(serverIp, serverPort, direction, bitrate, insecure),
-            bytesSent = bytesSent,
-            bytesReceived = bytesReceived,
-            connectionDrops = connectionDrops
+            lossSpikes = lossSpikes
         )
     }
 
@@ -64,9 +62,7 @@ class SessionPrefs(context: Context) {
         val sessionId: String,
         val startedAt: Long,
         val config: MeasurementConfig,
-        val bytesSent: Long,
-        val bytesReceived: Long,
-        val connectionDrops: Int
+        val lossSpikes: Int
     )
 
     companion object {
@@ -78,8 +74,6 @@ class SessionPrefs(context: Context) {
         private const val KEY_DIRECTION = "direction"
         private const val KEY_BITRATE = "bitrate"
         private const val KEY_INSECURE = "insecure"
-        private const val KEY_BYTES_SENT = "bytes_sent"
-        private const val KEY_BYTES_RECEIVED = "bytes_received"
-        private const val KEY_CONNECTION_DROPS = "connection_drops"
+        private const val KEY_LOSS_SPIKES = "connection_drops"
     }
 }

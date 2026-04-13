@@ -88,16 +88,11 @@ fun RunningScreen(
         val timestamp = point?.timestamp?.toString() ?: "--"
         val transport = runningState.transportStats
         val rtt = transport?.rttMs?.let { String.format("%.1f", it) } ?: "--"
-        val loss = transport?.lossPct?.let { String.format("%.2f", it) } ?: "--"
-        val cwnd = transport?.cwnd?.toString() ?: "--"
-        val bytesTx = transport?.txBytes?.toString() ?: "--"
-        val bytesRx = transport?.rxBytes?.toString() ?: "--"
-        val jitter = transport?.jitterMs?.let { String.format("%.1f", it) } ?: "--"
-        val lossSource = when (transport?.lossJitterSource) {
-            dev.ranmt.data.LossJitterSource.ReceivePath -> "Receive path"
-            dev.ranmt.data.LossJitterSource.SendPacing -> "Send pacing"
-            null -> "--"
-        }
+        val loss = point?.lossPct?.let { String.format("%.2f %%", it) } ?: "--"
+        val cwnd = transport?.cwnd?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
+        val bytesTx = transport?.txBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
+        val bytesRx = transport?.rxBytes?.let { dev.ranmt.ui.formatBytes(it) } ?: "--"
+        val rttvar = transport?.rttvarMs?.let { String.format("%.1f", it) } ?: "--"
 
         Spacer(modifier = Modifier.height(12.dp))
         TimerCard(seconds = runningState.elapsedSec, state = runningState.connectionState)
@@ -142,12 +137,11 @@ fun RunningScreen(
             subtitle = "QUIC statistics.",
             entries = listOf(
                 "RTT" to "$rtt ms",
-                "Loss" to "$loss %",
+                "Packet Loss" to loss,
                 "CWND" to cwnd,
-                "Jitter" to "$jitter ms",
+                "Rttvar" to "$rttvar ms",
                 "Bytes TX" to bytesTx,
-                "Bytes RX" to bytesRx,
-                "Loss Source" to lossSource
+                "Bytes RX" to bytesRx
             )
         )
         Spacer(modifier = Modifier.height(12.dp))
@@ -208,7 +202,6 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
     val stateColor by animateColorAsState(
         targetValue = when (state) {
             ConnectionState.Connected -> Color(0xFF2FB7A3)
-            ConnectionState.Buffering -> Color(0xFFF6B64B)
             ConnectionState.Reconnecting -> Color(0xFFE76D5A)
         },
         label = "state-color"
@@ -235,7 +228,6 @@ private fun TimerCard(seconds: Int, state: ConnectionState) {
                 Text(
                     text = when (state) {
                         ConnectionState.Connected -> "Connected"
-                        ConnectionState.Buffering -> "Buffering for tunnel"
                         ConnectionState.Reconnecting -> "Reconnecting"
                     },
                     style = MaterialTheme.typography.bodyMedium,

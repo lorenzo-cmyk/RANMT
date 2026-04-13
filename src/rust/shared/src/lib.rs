@@ -57,16 +57,11 @@ pub struct HandshakeAck {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HandshakeStatus {
     Ok,
     Error,
-}
-impl PartialEq for HandshakeStatus {
-    fn eq(&self, other: &Self) -> bool {
-        core::mem::discriminant(self) == core::mem::discriminant(other)
-    }
 }
 
 // ─────────────────────────────────────────────
@@ -100,8 +95,11 @@ pub struct ServerStats {
 pub struct QuicStats {
     /// Round-trip time in milliseconds (0 if no measurement available)
     pub rtt_ms: f64,
+    pub rttvar_ms: f64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub rx_packets: u64,
     pub cwnd: u64,
     pub lost_packets: u64,
     pub send_rate_bps: u64,
@@ -141,6 +139,17 @@ pub enum NetworkType {
 }
 
 // ─────────────────────────────────────────────
+// Traffic Datagram (for JSONL persistence)
+// ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrafficDatagram {
+    pub seq_num: u64,
+    pub send_ts_ms: u64,
+    pub recv_ts_ms: u64,
+}
+
+// ─────────────────────────────────────────────
 // WireMessage (serde tag owner)
 // ─────────────────────────────────────────────
 
@@ -157,6 +166,8 @@ pub enum WireMessage {
     ClientTelemetry(ClientTelemetry),
     #[serde(rename = "goodbye")]
     Goodbye(Goodbye),
+    #[serde(rename = "traffic_datagram")]
+    TrafficDatagram(TrafficDatagram),
 }
 
 // ─────────────────────────────────────────────
@@ -273,80 +284,6 @@ impl TrafficPacer {
 }
 
 // ─────────────────────────────────────────────
-// Loss & Jitter Tracker
-// ─────────────────────────────────────────────
-
-pub struct LossJitterTracker {
-    prev_seq: Option<u64>,
-    total_lost: u64,
-    total_received: u64,
-    prev_arrival_ms: Option<u64>,
-    prev_send_ts: Option<u64>,
-    jitter_ewma: f64,
-}
-
-impl Default for LossJitterTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LossJitterTracker {
-    pub fn new() -> Self {
-        Self {
-            prev_seq: None,
-            total_lost: 0,
-            total_received: 0,
-            prev_arrival_ms: None,
-            prev_send_ts: None,
-            jitter_ewma: 0.0,
-        }
-    }
-
-    /// Call this for each received datagram. Returns: (loss_count, jitter_ms)
-    pub fn on_datagram(&mut self, seq_num: u64, send_ts: u64, arrival_ms: u64) -> (u64, f64) {
-        self.total_received += 1;
-
-        let loss = match self.prev_seq {
-            Some(prev) => {
-                let gap = seq_num.saturating_sub(prev).saturating_sub(1);
-                self.total_lost += gap;
-                gap
-            }
-            None => 0,
-        };
-        self.prev_seq = Some(seq_num);
-
-        let jitter = match (self.prev_arrival_ms, self.prev_send_ts) {
-            (Some(prev_arr), Some(prev_send)) => {
-                let delta_arrival = arrival_ms.saturating_sub(prev_arr) as f64;
-                let delta_send = send_ts.saturating_sub(prev_send) as f64;
-                let pdv = (delta_arrival - delta_send).abs();
-                self.jitter_ewma = 0.9 * self.jitter_ewma + 0.1 * pdv;
-                pdv
-            }
-            _ => 0.0,
-        };
-        self.prev_arrival_ms = Some(arrival_ms);
-        self.prev_send_ts = Some(send_ts);
-
-        (loss, jitter)
-    }
-
-    pub fn loss_rate(&self) -> f64 {
-        let total = self.total_lost + self.total_received;
-        if total == 0 {
-            return 0.0;
-        }
-        self.total_lost as f64 / total as f64
-    }
-
-    pub fn jitter_ewma(&self) -> f64 {
-        self.jitter_ewma
-    }
-}
-
-// ─────────────────────────────────────────────
 // Server Session State
 // ─────────────────────────────────────────────
 
@@ -357,8 +294,6 @@ pub struct SessionState {
     pub client_version: String,
     pub jsonl_path: std::path::PathBuf,
     pub jsonl_file: File,
-    /// Datagram loss/jitter tracking (receiver side, for UL tests)
-    pub datagram_tracker: LossJitterTracker,
     /// Datagram sequence counter (sender side, for DL tests).
     /// Persisted across reconnects per spec §8.2 rule 4.
     pub datagram_send_seq: u64,
@@ -383,28 +318,43 @@ impl SessionState {
             client_version: String::new(),
             jsonl_path: jsonl_path.to_owned(),
             jsonl_file,
-            datagram_tracker: LossJitterTracker::new(),
             datagram_send_seq: 0,
             dormant_since: None,
         })
     }
 
     pub fn write_telemetry(&mut self, tel: &ClientTelemetry) {
-        let line = match serde_json::to_string(&WireMessage::ClientTelemetry(tel.clone())) {
+        self.append_wire_message(&WireMessage::ClientTelemetry(tel.clone()));
+    }
+
+    pub fn write_handshake(&mut self, h: &Handshake) {
+        self.append_wire_message(&WireMessage::Handshake(h.clone()));
+    }
+
+    pub fn write_server_stats(&mut self, stats: &ServerStats) {
+        self.append_wire_message(&WireMessage::ServerStats(stats.clone()));
+    }
+
+    pub fn write_traffic_datagram(&mut self, dgram: &TrafficDatagram) {
+        self.append_wire_message(&WireMessage::TrafficDatagram(dgram.clone()));
+    }
+
+    fn append_wire_message(&mut self, msg: &WireMessage) {
+        let line = match serde_json::to_string(msg) {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!(?e, "failed to serialize telemetry");
+                tracing::error!(?e, "failed to serialize message");
                 return;
             }
         };
 
         if let Err(e) = writeln!(self.jsonl_file, "{line}") {
-            tracing::error!(?e, "failed to append telemetry JSONL line");
+            tracing::error!(?e, "failed to append JSONL line");
             return;
         }
 
         if let Err(e) = self.jsonl_file.sync_all() {
-            tracing::error!(?e, "failed to sync telemetry JSONL file");
+            tracing::error!(?e, "failed to sync JSONL file");
         }
     }
 

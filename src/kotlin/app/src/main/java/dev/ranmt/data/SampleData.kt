@@ -13,7 +13,7 @@ object SampleData {
                 start = base,
                 durationSec = 765,
                 rat = "5G SA",
-                jitter = 9.8,
+                rttvar = 9.8,
                 loss = 0.8,
                 seed = 7
             ),
@@ -22,7 +22,7 @@ object SampleData {
                 start = base - 1000L * 60 * 60 * 3,
                 durationSec = 1289,
                 rat = "LTE",
-                jitter = 14.5,
+                rttvar = 14.5,
                 loss = 2.6,
                 seed = 11
             )
@@ -34,7 +34,7 @@ object SampleData {
         start: Long,
         durationSec: Int,
         rat: String,
-        jitter: Double,
+        rttvar: Double,
         loss: Double,
         seed: Int
     ): SessionDetail {
@@ -44,17 +44,15 @@ object SampleData {
             maxRsrp = telemetry.maxOf { it.rsrp },
             minRsrp = telemetry.minOf { it.rsrp },
             avgRsrp = avgRsrp,
-            connectionDrops = telemetry.count { it.lossPct > 5.0 },
-            bytesSent = 12_800_000,
-            bytesReceived = 12_300_000,
-            peakJitterMs = telemetry.maxOf { it.jitterMs }
+            lossSpikes = telemetry.count { it.lossPct > 20.0 },
+            peakRttvarMs = telemetry.maxOf { it.rttvarMs }
         )
         val summary = SessionSummary(
             id = id,
             startedAt = start,
             durationSec = durationSec,
-            averageJitterMs = jitter,
-            lossPct = loss,
+            averageRttvarMs = rttvar,
+            averageLossPct = loss,
             primaryRat = rat
         )
         return SessionDetail(summary = summary, metrics = metrics, telemetry = telemetry)
@@ -70,7 +68,7 @@ object SampleData {
             val t = start + (index * step * 1000L)
             val angle = index / 12.0
             val radius = 0.002 + 0.0006 * sin(index / 9.0)
-            val jitter = 4.0 + 8.0 * kotlin.math.abs(sin(index / 7.0))
+            val rttvar = 4.0 + 8.0 * kotlin.math.abs(sin(index / 7.0))
             val loss = if (index % 22 == 0) 8.0 else rand.nextDouble(0.0, 1.6)
             TelemetryPoint(
                 timestamp = t,
@@ -84,7 +82,7 @@ object SampleData {
                 pci = 200 + index % 10,
                 earfcn = 6300 + index % 30,
                 networkType = "LTE",
-                jitterMs = jitter,
+                rttvarMs = rttvar,
                 lossPct = loss
             )
         }

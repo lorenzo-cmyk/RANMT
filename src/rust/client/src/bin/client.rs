@@ -36,6 +36,10 @@ struct Cli {
     /// Enable debug logging
     #[arg(short = 'v', long)]
     verbose: bool,
+
+    /// Existing session UUID to reconnect to
+    #[arg(long)]
+    session_id: Option<String>,
 }
 
 #[tokio::main]
@@ -57,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ClientConfig {
         server_addr: cli.server,
         server_fqdn: None,
+        session_id: cli.session_id,
         port: cli.port,
         direction,
         bitrate_bps: cli.bitrate,
